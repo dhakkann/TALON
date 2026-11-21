@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CityNav | Real-Time Autonomous Flight Operations</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            drone: {
+              dark: '#0a0f1d',
+              card: '#131b2e',
+              border: '#1f2d4d',
+              cyan: '#00f0ff',
+              emerald: '#00ff9d',
+              amber: '#ffb800',
+              rose: '#ff3366',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #070b14;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .glow-cyan { text-shadow: 0 0 10px rgba(0, 240, 255, 0.6); }
+    .glow-box-cyan { box-shadow: 0 0 15px rgba(0, 240, 255, 0.2); }
+    .glow-box-emerald { box-shadow: 0 0 15px rgba(0, 255, 157, 0.25); }
+    .hud-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0c1220; }
+    ::-webkit-scrollbar-thumb { background: #1f2d4d; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #00f0ff; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-sm">
+
+  <!-- Top Navbar -->
+  <header class="bg-drone-card border-b border-drone-border px-5 py-3 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="h-3 w-3 rounded-full bg-emerald-400 animate-pulse"></div>
+      <h1 class="text-lg font-bold tracking-wider uppercase text-white flex items-center gap-2">
+        <span class="text-drone-cyan glow-cyan">CityNav</span>
+        <span class="text-xs bg-cyan-950 text-drone-cyan border border-cyan-800 px-2 py-0.5 rounded font-mono">AR511 REAL-TIME</span>
+      </h1>
+    </div>
+
+    <!-- Active telemetry pill badges -->
+    <div class="flex items-center space-x-6 mono text-xs">
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">STATUS:</span>
+        <span id="badge-mode" class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold">READY</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">ALTITUDE:</span>
+        <span id="badge-alt" class="text-drone-cyan font-bold">0.0 m</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">SPEED:</span>
+        <span id="badge-speed" class="text-white font-bold">0.0 m/s</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">SIMULATION:</span>
+        <span id="badge-sim" class="text-amber-400 font-bold">AIRSIM / MOCK</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Subgoals Sequence Banner -->
+  <div class="bg-[#0b101e] border-b border-drone-border px-5 py-2 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-3 overflow-x-auto" id="subgoals-container">
+      <span class="text-xs text-slate-400 font-mono uppercase">Subgoals:</span>
+      <div class="flex items-center space-x-2" id="subgoals-list">
+        <span class="px-2.5 py-1 text-xs rounded bg-slate-800 text-slate-300 border border-slate-700">Awaiting Mission Start</span>
+      </div>
+    </div>
+    <div class="flex items-center space-x-2 shrink-0">
+      <button onclick="emergencyHover()" class="px-3 py-1 bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-800 rounded font-semibold text-xs tracking-wide uppercase transition">
+        Emergency Hover
+      </button>
+    </div>
+  </div>
+
+  <!-- Main View Grid -->
+  <main class="flex-1 grid grid-cols-12 gap-3 p-3 overflow-hidden">
+    
+    <!-- LEFT COLUMN: Live Camera Feed & Telemetry HUD (7 Cols) -->
+    <section class="col-span-7 flex flex-col bg-drone-card border border-drone-border rounded-lg overflow-hidden glow-box-cyan">
+      <div class="px-4 py-2 bg-[#0d1424] border-b border-drone-border flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <span class="h-2 w-2 rounded-full bg-red-500 animate-ping"></span>
+          <span class="font-bold text-xs uppercase tracking-wider text-slate-300">Front Camera Feed (30 FPS | YOLO-World v2)</span>
+        </div>
+        <div class="mono text-xs text-slate-400 flex items-center space-x-4">
+          <span>LATENCY: <span id="stat-latency" class="text-drone-emerald">12 ms</span></span>
+          <span>FPS: <span id="stat-fps" class="text-drone-cyan">30.0</span></span>
+        </div>
+      </div>
+
+      <!-- Video Feed Container -->
+      <div class="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
+        <img id="live-stream" src="/video_feed" alt="Live Camera Feed" class="w-full h-full object-contain" />
+        
+        <!-- HUD Overlay Elements -->
+        <div class="hud-overlay p-4 flex flex-col justify-between">
+          <div class="flex justify-between items-start">
+            <div class="bg-black/60 backdrop-blur border border-cyan-500/30 px-3 py-1.5 rounded mono text-xs space-y-0.5">
+              <div>TARGET: <span id="hud-target" class="text-drone-emerald font-bold">SEARCHING</span></div>
+              <div>DIST: <span id="hud-dist" class="text-white">--</span></div>
+            </div>
+            <div class="bg-black/60 backdrop-blur border border-cyan-500/30 px-3 py-1.5 rounded mono text-xs space-y-0.5 text-right">
+              <div>X: <span id="hud-x" class="text-slate-300">0.0</span> | Y: <span id="hud-y" class="text-slate-300">0.0</span></div>
+              <div>YAW: <span id="hud-yaw" class="text-drone-cyan">0.0°</span></div>
+            </div>
+          </div>
+
+          <!-- Avoidance warning popup -->
+          <div id="avoidance-banner" class="hidden self-center bg-rose-950/80 border border-rose-500 text-rose-300 px-4 py-1.5 rounded-full mono text-xs font-bold animate-bounce">
+            APF OBSTACLE AVOIDANCE ENGAGED
+          </div>
+
+          <div class="flex justify-between items-end mono text-xs text-slate-400">
+            <div>CAM: FRONT_CENTER 90° FOV</div>
+            <div>RES: 640x480 RGB-D</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Route Instruction Input Bar -->
+      <div class="p-3 bg-[#0d1424] border-t border-drone-border flex items-center space-x-2">
+        <input id="input-mission" type="text" placeholder="Enter route instruction (e.g. Fly to the fountain, then pass red building, navigate to tower)" 
+               onkeydown="if(event.key==='Enter') startMission()"
+               class="flex-1 bg-[#090d18] border border-drone-border rounded px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-drone-cyan" />
+        <button onclick="startMission()" class="px-4 py-2 bg-drone-cyan hover:bg-cyan-400 text-slate-950 font-bold text-xs uppercase rounded transition">
+          Launch Mission
+        </button>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN: Mission Control & Explainability Feed (5 Cols) -->
+    <section class="col-span-5 flex flex-col space-y-3 overflow-hidden">
+      
+      <!-- Live Rationale Narration Log -->
+      <div class="flex-1 bg-drone-card border border-drone-border rounded-lg flex flex-col overflow-hidden">
+        <div class="px-4 py-2 bg-[#0d1424] border-b border-drone-border flex items-center justify-between">
+          <span class="font-bold text-xs uppercase tracking-wider text-slate-300 flex items-center gap-2">
+            <svg class="w-4 h-4 text-drone-emerald" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Live Rationale Narration Stream
+          </span>
+          <span class="text-xs mono text-slate-500">REALTIME EXPLAINABILITY</span>
+        </div>
+        <div id="narration-log" class="flex-1 p-3 overflow-y-auto space-y-2 mono text-xs">
+          <div class="text-slate-500 italic">System ready. Awaiting navigation mission...</div>
+        </div>
+      </div>
+
+      <!-- Mid-Flight Operator Chat & Intervention -->
+      <div class="bg-drone-card border border-drone-border rounded-lg p-3 flex flex-col space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-xs uppercase tracking-wider text-slate-300 flex items-center gap-2">
+            <svg class="w-4 h-4 text-drone-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            Mid-Flight Operator Interruption
+          </span>
+          <span class="text-xs text-slate-400 font-mono">NON-BLOCKING</span>
+        </div>
+
+        <!-- Quick Action Chips -->
+        <div class="flex flex-wrap gap-1.5 pt-1">
+          <button onclick="sendQuickChat('no, the blue building')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-drone-cyan border border-slate-700 rounded transition">
+            Target: Blue Building
+          </button>
+          <button onclick="sendQuickChat('go back to the fountain')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-drone-emerald border border-slate-700 rounded transition">
+            Return: Fountain
+          </button>
+          <button onclick="sendQuickChat('what have you seen?')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded transition">
+            Query: Memory
+          </button>
+          <button onclick="sendQuickChat('stop and hover')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-rose-400 border border-slate-700 rounded transition">
+            Hover
+          </button>
+        </div>
+
+        <!-- Chat Input Form -->
+        <div class="flex items-center space-x-2 pt-1">
+          <input id="input-chat" type="text" placeholder="Type correction (e.g. 'no, go to the car') or query..." 
+                 onkeydown="if(event.key==='Enter') sendChat()"
+                 class="flex-1 bg-[#090d18] border border-drone-border rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-drone-cyan" />
+          <button onclick="sendChat()" class="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold text-xs uppercase rounded transition">
+            Send
+          </button>
+        </div>
+      </div>
+
+      <!-- 3D Persistent Spatial Memory Table -->
+      <div class="h-44 bg-drone-card border border-drone-border rounded-lg flex flex-col overflow-hidden">
+        <div class="px-4 py-2 bg-[#0d1424] border-b border-drone-border flex items-center justify-between">
+          <span class="font-bold text-xs uppercase tracking-wider text-slate-300 flex items-center gap-2">
+            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            3D Spatial Landmark Registry
+          </span>
+          <span id="stat-landmark-count" class="mono text-xs text-amber-400">0 landmarks</span>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+          <table class="w-full text-left mono text-xs">
+            <thead class="bg-[#090d18] text-slate-400 uppercase text-[10px] sticky top-0">
+              <tr>
+                <th class="py-1.5 px-3">ID</th>
+                <th class="py-1.5 px-3">Landmark</th>
+                <th class="py-1.5 px-3">Pos [X, Y, Z]</th>
+                <th class="py-1.5 px-3">Obs</th>
+              </tr>
+            </thead>
+            <tbody id="landmarks-tbody" class="divide-y divide-drone-border text-slate-300">
+              <tr><td colspan="4" class="p-3 text-center text-slate-500 italic">No landmarks registered yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Client JavaScript for SSE Streaming and Controls -->
+  <script>
+    let activeSubgoals = [];
+    let currentSubgoalIdx = 0;
+    let evtSource = null;
+
+    // Connect to Server-Sent Events endpoint
+    function setupSSE() {
+      if (evtSource) {
+        evtSource.close();
+      }
+      evtSource = new EventSource("/events");
+
+      evtSource.onmessage = function(e) {
+        try {
+          const data = JSON.parse(e.data);
+          updateDashboard(data);
+        } catch (err) {
+          console.error("SSE parse error:", err);
+        }
+      };
+
+      evtSource.onerror = function() {
+        console.warn("SSE connection error. Reconnecting in 3s...");
+        if (evtSource) {
+          evtSource.close();
+          evtSource = null;
+        }
+        setTimeout(setupSSE, 3000);
+      };
+    }
+
+    function updateDashboard(data) {
+      if (!data) return;
+      const tel = data.telemetry || {};
+
+      // Badges
+      if (tel.altitude !== undefined) {
+        document.getElementById("badge-alt").innerText = tel.altitude.toFixed(1) + " m";
+      }
+      if (tel.speed !== undefined) {
+        document.getElementById("badge-speed").innerText = tel.speed.toFixed(1) + " m/s";
+      }
+      if (tel.mode) {
+        document.getElementById("badge-mode").innerText = tel.mode.toUpperCase();
+      }
+      if (tel.is_mock !== undefined) {
+        document.getElementById("badge-sim").innerText = tel.is_mock ? "KINEMATIC MOCK" : "AIRSIM CONNECTED";
+        document.getElementById("badge-sim").className = tel.is_mock ? "text-amber-400 font-bold" : "text-emerald-400 font-bold";
+      }
+
+      // HUD
+      if (tel.position) {
+        document.getElementById("hud-x").innerText = tel.position[0].toFixed(1);
+        document.getElementById("hud-y").innerText = tel.position[1].toFixed(1);
+      }
+      if (tel.yaw !== undefined) {
+        const deg = (tel.yaw * 180 / Math.PI).toFixed(0);
+        document.getElementById("hud-yaw").innerText = deg + "°";
+      }
+      if (tel.active_target) {
+        document.getElementById("hud-target").innerText = tel.active_target.toUpperCase();
+      } else {
+        document.getElementById("hud-target").innerText = "SEARCHING";
+      }
+      if (tel.distance_to_target !== null && tel.distance_to_target !== undefined) {
+        document.getElementById("hud-dist").innerText = tel.distance_to_target.toFixed(1) + " m";
+      } else {
+        document.getElementById("hud-dist").innerText = "--";
+      }
+
+      // Avoidance banner
+      const banner = document.getElementById("avoidance-banner");
+      if (tel.obstacle_avoidance) {
+        banner.classList.remove("hidden");
+        banner.innerText = "APF AVOIDANCE: DEFLECTING " + (tel.avoidance_direction || "CLEAR");
+      } else {
+        banner.classList.add("hidden");
+      }
+
+      // Performance stats
+      if (tel.fps) document.getElementById("stat-fps").innerText = tel.fps.toFixed(1);
+      if (tel.perception_latency_ms) document.getElementById("stat-latency").innerText = tel.perception_latency_ms.toFixed(1) + " ms";
+
+      // Subgoals rendering
+      if (tel.subgoals && tel.subgoals.length > 0) {
+        renderSubgoals(tel.subgoals, tel.active_subgoal_index || 0);
+      }
+
+      // Live Narrations
+      if (data.narrations) {
+        renderNarrations(data.narrations);
+      }
+
+      // Landmarks
+      if (data.landmarks) {
+        renderLandmarks(data.landmarks);
+      }
+    }
+
+    function renderSubgoals(subgoals, activeIdx) {
+      const container = document.getElementById("subgoals-list");
+      container.innerHTML = "";
+      subgoals.forEach((sg, idx) => {
+        const el = document.createElement("span");
+        if (idx < activeIdx) {
+          el.className = "px-2.5 py-1 text-xs rounded bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1 font-mono";
+          el.innerHTML = "✓ " + sg;
+        } else if (idx === activeIdx) {
+          el.className = "px-2.5 py-1 text-xs rounded bg-cyan-950 text-drone-cyan border border-cyan-500 font-bold flex items-center gap-1 font-mono glow-box-cyan animate-pulse";
+          el.innerHTML = "▶ " + sg;
+        } else {
+          el.className = "px-2.5 py-1 text-xs rounded bg-slate-900 text-slate-400 border border-slate-800 font-mono";
+          el.innerHTML = (idx + 1) + ". " + sg;
+        }
+        container.appendChild(el);
+      });
+    }
+
+    function renderNarrations(narrations) {
+      const log = document.getElementById("narration-log");
+      log.innerHTML = "";
+      narrations.forEach(n => {
+        const row = document.createElement("div");
+        row.className = "p-1.5 rounded bg-[#090d18] border border-slate-800/60 flex flex-col space-y-0.5";
+        
+        let badgeColor = "bg-slate-800 text-slate-300";
+        if (n.event_type === "TARGET_ACQUIRED") badgeColor = "bg-cyan-950 text-drone-cyan border border-cyan-800";
+        else if (n.event_type === "WAYPOINT_REACHED") badgeColor = "bg-emerald-950 text-emerald-400 border border-emerald-800";
+        else if (n.event_type === "OBSTACLE_AVOIDANCE") badgeColor = "bg-rose-950 text-rose-400 border border-rose-800";
+        else if (n.event_type === "OPERATOR_INPUT" || n.event_type === "INTERRUPTION_HANDLED") badgeColor = "bg-amber-950 text-amber-300 border border-amber-800";
+
+        const timeStr = new Date(n.timestamp * 1000).toLocaleTimeString();
+        row.innerHTML = `
+          <div class="flex items-center justify-between text-[10px]">
+            <span class="px-1.5 py-0.2 rounded font-bold ${badgeColor}">${n.event_type}</span>
+            <span class="text-slate-500">${timeStr}</span>
+          </div>
+          <div class="text-slate-200">${n.message}</div>
+        `;
+        log.appendChild(row);
+      });
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function renderLandmarks(landmarks) {
+      const tbody = document.getElementById("landmarks-tbody");
+      document.getElementById("stat-landmark-count").innerText = landmarks.length + " landmarks";
+      if (!landmarks || landmarks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-500 italic">No landmarks registered yet</td></tr>';
+        return;
+      }
+      tbody.innerHTML = "";
+      landmarks.forEach(l => {
+        const tr = document.createElement("tr");
+        tr.className = "hover:bg-slate-800/40";
+        const p = l.pos || [0, 0, 0];
+        tr.innerHTML = `
+          <td class="py-1 px-3 text-cyan-400 font-bold">${l.id}</td>
+          <td class="py-1 px-3 text-white font-medium">${l.name}</td>
+          <td class="py-1 px-3 text-slate-400">[${p[0].toFixed(1)}, ${p[1].toFixed(1)}, ${p[2].toFixed(1)}]</td>
+          <td class="py-1 px-3 text-amber-400 font-bold">${l.count}x</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Operator Chat Commands
+    function sendChat() {
+      const input = document.getElementById("input-chat");
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = "";
+
+      fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg })
+      });
+    }
+
+    function sendQuickChat(text) {
+      fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text })
+      });
+    }
+
+    function startMission() {
+      const input = document.getElementById("input-mission");
+      const instruction = input.value.trim();
+      fetch("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: instruction })
+      });
+    }
+
+    function emergencyHover() {
+      fetch("/api/stop", { method: "POST" });
+    }
+
+    // Start streaming on page load
+    window.addEventListener("DOMContentLoaded", setupSSE);
+  </script>
+</body>
+</html>

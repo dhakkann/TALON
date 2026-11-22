@@ -125,7 +125,11 @@ class DialogueManager:
             if orbit_info and orbit_info.get("target"):
                 rev_part = f" {int(orbit_info['revolutions'])} times" if orbit_info.get("revolutions") else ""
                 facing_part = " facing forward" if orbit_info.get("facing") == "TANGENT" else ""
-                return [f"circle around {orbit_info['target']}{rev_part}{facing_part}".strip()]
+                speed_part = f" at {orbit_info['speed']} m/s" if (orbit_info.get("speed") and orbit_info["speed"] != 3.0) else ""
+                radius_part = f" at {orbit_info['radius']}m radius" if (orbit_info.get("radius") and orbit_info["radius"] != 16.0) else ""
+                altitude_part = f" at {orbit_info['altitude']}m altitude" if (orbit_info.get("altitude") and orbit_info["altitude"] != 10.0) else ""
+                direction_part = " clockwise" if orbit_info.get("direction") == "CW" else ""
+                return [f"circle around {orbit_info['target']}{rev_part}{facing_part}{speed_part}{radius_part}{altitude_part}{direction_part}".strip()]
 
         # Attempt Gemini Flash decomposition if client available
         if self.client is not None:
@@ -218,10 +222,12 @@ class DialogueManager:
             wp_match = re.findall(r'\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]', msg)
             wps = [[float(x), float(y), float(z)] for x, y, z in wp_match]
             facing = "INWARD" if "inward" in msg.lower() else "TANGENT"
+            m_spd = re.search(r'\b(?:speed|velocity|at|spd)\s*(?:of|=|:)?\s*(\d+(?:\.\d+)?)\s*(?:m/s|mps|meters?\s*(?:per|/)\s*sec(?:ond)?)?\b', msg, re.IGNORECASE)
+            spd = float(m_spd.group(1)) if m_spd else 3.0
             return {
                 "intent": "WAYPOINT_PATH",
                 "waypoints": wps,
-                "speed": 3.0,
+                "speed": spd,
                 "facing": facing,
                 "target": "waypoint_curve",
                 "reply": f"Executing continuous 3D waypoint curve ({len(wps)} points).",
@@ -1053,10 +1059,12 @@ class DialogueManager:
             wp_match = re.findall(r'\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]', msg)
             wps = [[float(x), float(y), float(z)] for x, y, z in wp_match]
             facing = "INWARD" if "inward" in lower else "TANGENT"
+            m_spd = re.search(r'\b(?:speed|velocity|at|spd)\s*(?:of|=|:)?\s*(\d+(?:\.\d+)?)\s*(?:m/s|mps|meters?\s*(?:per|/)\s*sec(?:ond)?)?\b', lower)
+            spd = float(m_spd.group(1)) if m_spd else 3.0
             return {
                 "intent": "WAYPOINT_PATH",
                 "waypoints": wps,
-                "speed": 3.0,
+                "speed": spd,
                 "facing": facing,
                 "target": "waypoint_curve",
                 "reply": f"Executing continuous 3D waypoint curve ({len(wps)} points).",

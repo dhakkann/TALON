@@ -87,6 +87,66 @@ class TestScenarioEvaluator(unittest.TestCase):
         self.assertEqual(res.details["third_target"], "blue building")
         self.assertEqual(res.details["interruption_target"], "red building")
 
+    def test_single_landmark_orbit_kinematics(self):
+        """Scenario 13: Single landmark orbit engages ORBIT mode and points inward."""
+        res = self.evaluator.run_scenario_orbit_blue_building()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_tangent_orbit_speed_and_radius(self):
+        """Scenario 14: Tangent orbit with custom speed and radius."""
+        res = self.evaluator.run_scenario_tangent_orbit_speed_radius()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_clockwise_orbit_parameters(self):
+        """Scenario 15: Clockwise orbit direction and altitude parameters."""
+        res = self.evaluator.run_scenario_clockwise_orbit_parameters()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_compound_multi_altitude_orbit(self):
+        """Scenario 16: Compound multi-altitude orbit preserves parameters and transitions."""
+        res = self.evaluator.run_scenario_compound_multi_altitude_orbit()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_explicit_3d_waypoint_path(self):
+        """Scenario 17: Explicit 3D continuous waypoint path followed."""
+        res = self.evaluator.run_scenario_explicit_3d_waypoint_path()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_collective_quantifier_city_tour(self):
+        """Scenario 18: Universal collective quantifier expands to full city tour."""
+        res = self.evaluator.run_scenario_collective_quantifier_city_tour()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_stop_and_hover_interruption(self):
+        """Scenario 19: Stop and hover interruption halts navigation cleanly."""
+        res = self.evaluator.run_scenario_stop_and_hover_interruption()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_midflight_orbit_interruption(self):
+        """Scenario 20: Mid-flight linear navigation diverted to orbit."""
+        res = self.evaluator.run_scenario_midflight_orbit_interruption()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_pure_altitude_change(self):
+        """Scenario 21: Pure altitude change without landmark updates vertical target."""
+        res = self.evaluator.run_scenario_pure_altitude_change()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_geofence_boundary_safety(self):
+        """Scenario 22: Geofence boundary restrains drone safely."""
+        res = self.evaluator.run_scenario_geofence_boundary_safety()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_mid_orbit_spatial_target_interruption(self):
+        """Scenario 23: Mid-orbit interruption with spatial target diverts cleanly."""
+        res = self.evaluator.run_scenario_mid_orbit_spatial_target_interruption()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
+    def test_return_to_past_landmark(self):
+        """Scenario 24: Return to past landmark routes to prior memory location."""
+        res = self.evaluator.run_scenario_return_to_past_landmark()
+        self.assertTrue(res.passed, f"Scenario failed: {res.error_message}")
+
     def test_result_serialization(self):
         """ScenarioResult serializes cleanly to dict for automated reporting and CI."""
         res = ScenarioResult(

@@ -923,6 +923,543 @@ class ScenarioEvaluator:
         return res
 
     # =========================================================================
+    # SCENARIO 13: Single Landmark Orbit Kinematics ("hover in circle around blue building at 10m altitude")
+    # =========================================================================
+    def run_scenario_orbit_blue_building(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Single Landmark Orbit Kinematics",
+            description="Verify 'hover in circle around blue building at 10m altitude' engages ORBIT mode, sets center [75, -14], and points yaw inward.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            instruction = "hover in circle around blue building at 10m altitude"
+            self.log(res, f"Starting mission: '{instruction}'")
+            subgoals = orch.start_mission(instruction)
+            self.log(res, f"Subgoals planned: {subgoals}")
+
+            # Step simulation to finish takeoff and engage orbit
+            for _ in range(25):
+                orch.flight.step_control(depth_img=None)
+                time.sleep(0.01)
+
+            telem = orch.get_telemetry()
+            self.log(res, f"Telemetry after takeoff: mode={telem['mode']}, pos={telem['position']}, alt={telem['altitude']}")
+
+            if telem["mode"] != "ORBIT":
+                res.error_message = f"Expected mode 'ORBIT', got '{telem['mode']}'"
+                return res
+
+            if orch.flight.orbit_center is None or not np.allclose(orch.flight.orbit_center[:2], [75.0, -14.0], atol=1.0):
+                res.error_message = f"Orbit center mismatch: expected [75, -14], got {orch.flight.orbit_center}"
+                return res
+
+            if orch.flight.orbit_facing != "INWARD":
+                res.error_message = f"Expected INWARD facing, got {orch.flight.orbit_facing}"
+                return res
+
+            res.details = {"telemetry": telem, "subgoals": subgoals}
+            res.passed = True
+            self.log(res, "PASSED: Single landmark orbit kinematics verified.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 14: Tangent-Facing Orbit with Speed & Radius
+    # =========================================================================
+    def run_scenario_tangent_orbit_speed_radius(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Tangent Orbit with Custom Speed and Radius",
+            description="Verify 'circle red building twice facing forward at 5 m/s at 20m radius' applies tangent yaw, speed 5 m/s, and radius 20m.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            cmd = "circle red building twice facing forward at 5 m/s at 20m radius"
+            self.log(res, f"Starting mission: '{cmd}'")
+            subgoals = orch.start_mission(cmd)
+
+            for _ in range(25):
+                orch.flight.step_control(depth_img=None)
+                time.sleep(0.01)
+
+            if orch.flight.orbit_facing != "TANGENT":
+                res.error_message = f"Expected TANGENT facing, got {orch.flight.orbit_facing}"
+                return res
+            if not np.isclose(orch.flight.orbit_radius, 20.0, atol=0.5):
+                res.error_message = f"Expected radius 20.0m, got {orch.flight.orbit_radius}"
+                return res
+            if not np.isclose(orch.flight.orbit_speed, 5.0, atol=0.5):
+                res.error_message = f"Expected speed 5.0 m/s, got {orch.flight.orbit_speed}"
+                return res
+            if orch.flight.orbit_revolutions != 2.0:
+                res.error_message = f"Expected revolutions 2.0, got {orch.flight.orbit_revolutions}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Tangent facing, speed, radius, and revolution count verified.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 15: Clockwise Orbit Parameter Inversion
+    # =========================================================================
+    def run_scenario_clockwise_orbit_parameters(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Clockwise Orbit Parameter Inversion",
+            description="Verify 'circle around blue building 3 times clockwise at 25m altitude' sets direction=-1 (CW), altitude=25m, and revolutions=3.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            cmd = "circle around blue building 3 times clockwise at 25m altitude"
+            self.log(res, f"Starting mission: '{cmd}'")
+            orch.start_mission(cmd)
+
+            for _ in range(25):
+                orch.flight.step_control(depth_img=None)
+                time.sleep(0.01)
+
+            if orch.flight.orbit_direction != -1:
+                res.error_message = f"Expected orbit direction -1 (CW), got {orch.flight.orbit_direction}"
+                return res
+            if not np.isclose(orch.flight.orbit_altitude, 25.0, atol=0.5):
+                res.error_message = f"Expected altitude 25.0m, got {orch.flight.orbit_altitude}"
+                return res
+            if orch.flight.orbit_revolutions != 3.0:
+                res.error_message = f"Expected revolutions 3.0, got {orch.flight.orbit_revolutions}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Clockwise orbit direction and altitude parameters verified.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 16: Compound Multi-Altitude Multi-Landmark Orbit
+    # =========================================================================
+    def run_scenario_compound_multi_altitude_orbit(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Compound Multi-Altitude Multi-Landmark Orbit",
+            description="Verify 'circle around blue building 3 times at 30m altitude, and then around red building 2 times at 35m altitude' preserves altitudes and advances legs.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            cmd = "circle around blue building 3 times at 30m altitude, and then around red building 2 times at 35m altitude"
+            self.log(res, f"Starting mission: '{cmd}'")
+            subgoals = orch.start_mission(cmd)
+            self.log(res, f"Parsed subgoals: {subgoals}")
+
+            if len(subgoals) != 2:
+                res.error_message = f"Expected 2 subgoals, got {len(subgoals)}: {subgoals}"
+                return res
+
+            if "30" not in subgoals[0] or "35" not in subgoals[1]:
+                res.error_message = f"Altitude qualifiers stripped from subgoals: {subgoals}"
+                return res
+
+            # Simulate Leg 1 active
+            orch.flight.is_in_air = True
+            orch.flight_mode = "ORBIT"
+            orch.flight.set_orbit_target(
+                center_xyz=[75.0, -14.0, 0.0],
+                radius=16.0,
+                altitude=30.0,
+                revolutions=3.0,
+                target_name="blue building"
+            )
+
+            # Advance to Leg 2
+            orch.flight.orbit_completed = True
+            for _ in range(5):
+                state = orch.flight.step_control(depth_img=None)
+                if state.get("has_arrived"):
+                    with orch._state_lock:
+                        orch._set_current_subgoal_target(1)
+                    break
+                time.sleep(0.01)
+
+            if orch.active_subgoal_index != 1:
+                res.error_message = f"Did not advance to active subgoal index 1: {orch.active_subgoal_index}"
+                return res
+
+            if not np.isclose(orch.flight.orbit_altitude, 35.0, atol=0.5):
+                res.error_message = f"Expected Leg 2 altitude 35.0m, got {orch.flight.orbit_altitude}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Compound multi-altitude orbit sequenced and climbed cleanly.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 17: Explicit 3D Waypoint Path Following
+    # =========================================================================
+    def run_scenario_explicit_3d_waypoint_path(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Explicit 3D Continuous Waypoint Path Following",
+            description="Verify 'follow curve [[15, 25, -20], [25, 35, -25], [35, 25, -20]]' sets CURVE mode and follows 3D coordinates.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            cmd = "follow curve [[15, 25, -20], [25, 35, -25], [35, 25, -20]]"
+            self.log(res, f"Injecting interruption: '{cmd}'")
+            orch.dialogue.queue_user_message(cmd)
+
+            # Allow cognitive worker to process interruption
+            t_wait = time.time()
+            handled = False
+            while time.time() - t_wait < 3.0:
+                if orch.flight_mode in ("CURVE", "WAYPOINT_PATH"):
+                    handled = True
+                    break
+                time.sleep(0.05)
+
+            if not handled:
+                res.error_message = f"Expected CURVE flight mode, got '{orch.flight_mode}'"
+                return res
+
+            if not orch.flight.is_following_path:
+                res.error_message = "Flight controller is_following_path flag not set"
+                return res
+
+            if len(orch.flight.trajectory_path) != 3:
+                res.error_message = f"Expected 3 trajectory points, got {len(orch.flight.trajectory_path)}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Explicit 3D waypoint curve configured and followed.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 18: Universal Collective Quantifier Tour
+    # =========================================================================
+    def run_scenario_collective_quantifier_city_tour(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Universal Collective Quantifier City Tour",
+            description="Verify 'visit all landmarks' decomposes into full 5-landmark tour in canonical order.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            cmd = "visit all landmarks"
+            self.log(res, f"Starting mission: '{cmd}'")
+            subgoals = orch.start_mission(cmd)
+            self.log(res, f"Subgoals planned: {subgoals}")
+
+            expected = ["fountain", "red building", "blue building", "tower", "hospital"]
+            if subgoals != expected:
+                res.error_message = f"Expected {expected}, got {subgoals}"
+                return res
+
+            if orch.active_subgoal_index != 0 or orch.active_target_name != "fountain":
+                res.error_message = f"First target mismatch: expected 'fountain', got '{orch.active_target_name}'"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Universal collective quantifier city tour planned correctly.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 19: Mid-Flight Stop & Hover Interruption
+    # =========================================================================
+    def run_scenario_stop_and_hover_interruption(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Mid-Flight Stop & Hover Interruption",
+            description="Verify operator 'stop and hover right here' halts active navigation into stationary HOVERING.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            orch.start_mission("tower")
+            time.sleep(0.2)
+
+            self.log(res, "Injecting interruption: 'stop and hover right here'")
+            orch.dialogue.queue_user_message("stop and hover right here")
+
+            t_wait = time.time()
+            hovering = False
+            while time.time() - t_wait < 3.0:
+                telem = orch.get_telemetry()
+                if telem["mode"] == "HOVERING":
+                    hovering = True
+                    break
+                time.sleep(0.05)
+
+            if not hovering:
+                res.error_message = f"Drone failed to enter HOVERING mode. Current mode: '{orch.flight_mode}'"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Stop and hover cleanly entered stationary hover.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 20: Mid-Flight Orbit Interruption from Linear Flight
+    # =========================================================================
+    def run_scenario_midflight_orbit_interruption(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Mid-Flight Orbit Interruption from Linear Flight",
+            description="Verify linear flight to 'fountain' interrupted by 'circle twice around red building' switches directly to ORBIT.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            orch.start_mission("fountain")
+            time.sleep(0.2)
+
+            self.log(res, "Injecting interruption: 'circle twice around red building'")
+            orch.dialogue.queue_user_message("circle twice around red building")
+
+            t_wait = time.time()
+            in_orbit = False
+            while time.time() - t_wait < 3.0:
+                telem = orch.get_telemetry()
+                if telem["mode"] == "ORBIT" and telem.get("orbit_target") == "red building":
+                    in_orbit = True
+                    break
+                time.sleep(0.05)
+
+            if not in_orbit:
+                res.error_message = f"Failed to switch to ORBIT mode around red building: {orch.flight_mode}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Mid-flight linear navigation diverted to orbit around red building.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 21: Pure Altitude Change Command Without Landmark
+    # =========================================================================
+    def run_scenario_pure_altitude_change(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Pure Altitude Change Command Without Landmark",
+            description="Verify operator 'climb to 40m' updates target altitude to 40m without needing a landmark destination.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            # Place in hover
+            orch.flight_mode = "HOVERING"
+            orch.flight.is_in_air = True
+            orch.flight.is_hovering = True
+
+            self.log(res, "Injecting interruption: 'climb to 40m'")
+            orch.dialogue.queue_user_message("climb to 40m")
+
+            t_wait = time.time()
+            alt_updated = False
+            while time.time() - t_wait < 3.0:
+                if np.isclose(orch.flight.target_altitude, 40.0, atol=1.0):
+                    alt_updated = True
+                    break
+                time.sleep(0.05)
+
+            if not alt_updated:
+                res.error_message = f"Target altitude not updated: expected 40.0m, got {orch.flight.target_altitude}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Pure altitude change adjusted vertical target correctly.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 22: Geofence Boundary Collision Clamping
+    # =========================================================================
+    def run_scenario_geofence_boundary_safety(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Geofence Boundary Collision Clamping",
+            description="Verify drone attempting to exceed horizontal geofence limit (250m) is clamped and safe.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        try:
+            orch.flight.is_in_air = True
+            # Place near boundary at X=248m, Y=0m
+            orch.flight._pose = (248.0, 0.0, -10.0, 0.0)
+            orch.flight.target_position = np.array([300.0, 0.0, -10.0])  # Beyond boundary
+
+            # Step control
+            state = orch.flight.step_control(depth_img=None)
+            cmd_v = state["cmd_velocity"]
+            self.log(res, f"Position: {orch.flight._pose[:2]}, Commanded velocity toward outside: {cmd_v}")
+
+            # Advance 20 steps
+            for _ in range(20):
+                orch.flight.step_control(depth_img=None)
+
+            new_x = orch.flight._pose[0]
+            self.log(res, f"Position after stepping toward out-of-bounds: X={new_x:.2f}m")
+            if new_x > 255.0:
+                res.error_message = f"Geofence violated: X exceeded limit (got {new_x:.2f}m)"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Geofence boundary successfully restrained drone safely within perimeter.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 23: Mid-Orbit Interruption with Spatial Target
+    # =========================================================================
+    def run_scenario_mid_orbit_spatial_target_interruption(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Mid-Orbit Interruption with Spatial Target",
+            description="Verify active orbit interrupted by 'hover 100m above red building' cleanly terminates orbit and climbs to 100m above red building.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            orch.start_mission("circle around blue building")
+            time.sleep(0.3)
+
+            self.log(res, "Interrupting active orbit with 'hover 100m above red building'")
+            orch.dialogue.queue_user_message("hover 100m above red building")
+
+            t_wait = time.time()
+            diverted = False
+            while time.time() - t_wait < 3.0:
+                telem = orch.get_telemetry()
+                if "red building" in str(telem.get("active_target")).lower() and telem["mode"] != "ORBIT":
+                    diverted = True
+                    break
+                time.sleep(0.05)
+
+            if not diverted:
+                res.error_message = f"Failed to divert from orbit to target correction: mode={orch.flight_mode}, target={orch.active_target_name}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Mid-orbit spatial target interruption diverted cleanly.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
+    # SCENARIO 24: Return to Past Landmark Memory Recall
+    # =========================================================================
+    def run_scenario_return_to_past_landmark(self) -> ScenarioResult:
+        t0 = time.time()
+        res = ScenarioResult(
+            name="Return to Past Landmark Memory Recall",
+            description="Verify operator 'go back to fountain' recalls past fountain coordinates and diverts flight.",
+            passed=False,
+            duration_sec=0.0
+        )
+        orch = self._create_mock_orchestrator()
+        orch.start(start_dashboard=False)
+        try:
+            # Register fountain in spatial memory
+            orch.memory.add_observation("fountain", np.array([32.0, 0.0, -5.0]), confidence=0.92)
+            orch.start_mission("hospital")
+            time.sleep(0.3)
+
+            self.log(res, "Injecting interruption: 'go back to fountain'")
+            orch.dialogue.queue_user_message("go back to fountain")
+
+            t_wait = time.time()
+            recalled = False
+            while time.time() - t_wait < 3.0:
+                if orch.active_target_name and "fountain" in orch.active_target_name.lower():
+                    recalled = True
+                    break
+                time.sleep(0.05)
+
+            if not recalled:
+                res.error_message = f"Did not divert back to fountain: target={orch.active_target_name}"
+                return res
+
+            res.passed = True
+            self.log(res, "PASSED: Return to past landmark successfully routed to prior memory location.")
+        except Exception as e:
+            res.error_message = str(e)
+        finally:
+            orch.stop()
+            res.duration_sec = time.time() - t0
+        return res
+
+    # =========================================================================
     # Master Suite Runner
     # =========================================================================
     def run_all(self) -> List[ScenarioResult]:
@@ -940,6 +1477,18 @@ class ScenarioEvaluator:
             self.run_scenario_continuous_memory_pruning,
             self.run_scenario_malformed_and_punctuation_robustness,
             self.run_scenario_multileg_route_and_shorthand_resolution,
+            self.run_scenario_orbit_blue_building,
+            self.run_scenario_tangent_orbit_speed_radius,
+            self.run_scenario_clockwise_orbit_parameters,
+            self.run_scenario_compound_multi_altitude_orbit,
+            self.run_scenario_explicit_3d_waypoint_path,
+            self.run_scenario_collective_quantifier_city_tour,
+            self.run_scenario_stop_and_hover_interruption,
+            self.run_scenario_midflight_orbit_interruption,
+            self.run_scenario_pure_altitude_change,
+            self.run_scenario_geofence_boundary_safety,
+            self.run_scenario_mid_orbit_spatial_target_interruption,
+            self.run_scenario_return_to_past_landmark,
         ]
 
         results = []

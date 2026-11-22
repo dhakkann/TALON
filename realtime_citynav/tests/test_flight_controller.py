@@ -131,6 +131,20 @@ class TestFlightController(unittest.TestCase):
         custom_fc = RealtimeFlightController(vehicle_name="Drone_1", mock=True)
         self.assertEqual(custom_fc.vehicle_name, "Drone_1")
 
+    def test_geofence_perimeter_enforcement(self):
+        """Outside geofence radius (>160m), open search steers back towards city center."""
+        self.controller.takeoff(altitude=5.0)
+        self.controller._sim_pos = np.array([250.0, 50.0, -5.0], dtype=float)
+        self.controller.is_hovering = False
+        self.controller.set_target(None)  # Open search sweep mode
+
+        state = self.controller.step_control(depth_img=None)
+        cmd_v = state["cmd_velocity"]
+
+        # Velocity must point back towards city center (negative X and negative Y from [250, 50])
+        self.assertLess(cmd_v[0], -1.0)
+        self.assertLess(cmd_v[1], -0.2)
+
 
 if __name__ == "__main__":
     unittest.main()

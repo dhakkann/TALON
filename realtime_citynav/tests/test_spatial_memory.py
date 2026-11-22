@@ -116,6 +116,39 @@ class TestSpatialMemory(unittest.TestCase):
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0]["name"], "fresh_tower")
 
+    def test_empty_query_returns_none(self):
+        """Empty or whitespace queries return None instead of matching all landmarks."""
+        self.memory.add_observation("fountain", np.array([10.0, 10.0, -5.0]))
+        self.assertIsNone(self.memory.find_landmark(""))
+        self.assertIsNone(self.memory.find_landmark("   "))
+
+    def test_hyphenated_and_synonym_normalization(self):
+        """Hyphenated words and synonyms match and deduplicate seamlessly."""
+        self.assertTrue(self.memory.names_match("water-fountain", "fountain"))
+        self.assertTrue(self.memory.names_match("The Red-Building", "red building"))
+        self.assertTrue(self.memory.names_match("buildings", "building"))
+        self.assertTrue(self.memory.names_match("cars", "car"))
+
+        self.memory.add_observation("water-fountain", np.array([32.0, 0.0, 0.0]))
+        self.memory.add_observation("The Fountain", np.array([32.2, 0.1, 0.0]))
+        all_lms = self.memory.get_all_landmarks()
+        self.assertEqual(len(all_lms), 1)
+        self.assertEqual(all_lms[0]["count"], 2)
+
+    def test_prune_unconfirmed_noise(self):
+        """Unconfirmed single-observation landmarks older than threshold are pruned."""
+        lid1 = self.memory.add_observation("spurious_car", np.array([10.0, 10.0, -5.0]))
+        self.memory._landmarks[lid1]["last_seen"] -= 60.0
+
+        lid2 = self.memory.add_observation("confirmed_fountain", np.array([20.0, 20.0, -5.0]))
+        self.memory.add_observation("confirmed_fountain", np.array([20.1, 20.0, -5.0]))
+
+        pruned = self.memory.prune_unconfirmed(min_count=2, max_age_sec=30.0)
+        self.assertEqual(pruned, 1)
+        remaining = self.memory.get_all_landmarks()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["name"], "confirmed_fountain")
+
 
 if __name__ == "__main__":
     unittest.main()

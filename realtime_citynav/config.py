@@ -61,11 +61,23 @@ class MemoryConfig:
     max_retention_sec: float = 3600.0   # keep landmarks up to 1 hour
 
 
+def _get_default_gemini_key() -> str:
+    key = os.getenv("GEMINI_API_KEY", "")
+    if not key and os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as k:
+                key = winreg.QueryValueEx(k, "GEMINI_API_KEY")[0]
+        except Exception:
+            pass
+    return key
+
+
 @dataclass
 class CognitiveConfig:
-    """Gemini 2.0 Flash client and dialogue settings."""
-    model_name: str = "gemini-2.0-flash"
-    api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    """Gemini Flash client and dialogue settings."""
+    model_name: str = "gemini-3.5-flash-lite"
+    api_key: str = field(default_factory=_get_default_gemini_key)
     request_timeout_sec: float = 8.0
     narration_cadence_sec: float = 4.0  # cadence-based commentary interval
 
@@ -77,6 +89,7 @@ class DashboardConfig:
     port: int = 5000
     debug: bool = False
     fps_stream_target: int = 25
+    enabled: bool = True
 
 
 @dataclass

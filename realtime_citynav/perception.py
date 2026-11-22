@@ -254,21 +254,6 @@ class RealtimePerception:
                             "distance": dist
                         })
 
-            # Unit test fallback: if no mock landmark visible, maintain default test detection
-            if not detections and self.current_classes:
-                name = self.current_classes[0]
-                u_c, v_c = self.cx, self.cy
-                pos_3d = self.project_centroid_to_world(u_c, v_c, depth_img, drone_pose)
-                if pos_3d is not None:
-                    dist = float(np.linalg.norm(pos_3d[:2] - np.array(drone_pose[:2])))
-                    detections.append({
-                        "name": name,
-                        "conf": 0.88,
-                        "bbox": [int(u_c - 40), int(v_c - 40), int(u_c + 40), int(v_c + 40)],
-                        "centroid_2d": [float(u_c), float(v_c)],
-                        "world_pos": pos_3d,
-                        "distance": dist
-                    })
             self.last_projection_latency_ms = (time.perf_counter() - t_proj0) * 1000.0
             self._update_fps()
             return detections

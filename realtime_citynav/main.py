@@ -2,6 +2,7 @@
 
 import sys
 import os
+import re
 import time
 import math
 import argparse
@@ -46,8 +47,9 @@ class CityNavOrchestrator:
             max_retention_sec=self.config.memory.max_retention_sec
         )
         self.dialogue = DialogueManager(
-            api_key=self.config.cognitive.api_key,
-            model_name=self.config.cognitive.model_name
+            api_key=self.config.cognitive.api_key if not self.config.mock_gemini else "",
+            model_name=self.config.cognitive.model_name,
+            mock=self.config.mock_gemini
         )
         self.flight = RealtimeFlightController(
             ip=self.config.airsim.ip,
@@ -92,8 +94,8 @@ class CityNavOrchestrator:
         self._latest_depth: Optional[np.ndarray] = None
         self._latest_annotated: Optional[np.ndarray] = None
         self._latest_detections: List[Dict[str, Any]] = []
-        self._frame_lock = threading.Lock()
-        self._state_lock = threading.Lock()
+        self._frame_lock = threading.RLock()
+        self._state_lock = threading.RLock()
 
         # Thread handles
         self._flight_thread: Optional[threading.Thread] = None
@@ -121,8 +123,9 @@ class CityNavOrchestrator:
             self.flight_mode = "NAVIGATING"
             self._set_current_subgoal_target(0)
 
-        # Update perception vocabulary to include all subgoals deterministically
-        extended_classes = list(dict.fromkeys(self.config.perception.default_classes + [s.lower() for s in subgoals]))
+        # Update perception vocabulary to include base landmarks of all subgoals deterministically
+        base_classes = [self.dialogue.extract_base_landmark(s).lower() for s in subgoals]
+        extended_classes = list(dict.fromkeys(self.config.perception.default_classes + base_classes))
         self.perception.update_target_vocabulary(extended_classes)
 
         self.narrator.emit_event(
@@ -135,7 +138,12 @@ class CityNavOrchestrator:
         if not self.flight.is_in_air:
             self.flight_mode = "TAKING_OFF"
             self.flight.takeoff()
-            self.flight_mode = "NAVIGATING"
+            if self.flight.is_orbiting:
+                self.flight_mode = "ORBIT"
+            elif self.flight.is_following_path:
+                self.flight_mode = "CURVE"
+            else:
+                self.flight_mode = "NAVIGATING"
             self.narrator.emit_event(
                 "TAKEOFF_COMPLETED",
                 f"Cruise altitude {self.config.flight.takeoff_altitude:.1f}m reached. Commencing navigation.",
@@ -155,33 +163,137 @@ class CityNavOrchestrator:
         )
 
     def _compute_approach_target(self, name: str, center_pos: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Compute safe approach waypoint with standoff distance and elevated observation altitude."""
+        """Compute 3D target waypoint respecting spatial relations, prepositions, and elevations.
+        
+        Maps prepositions:
+        - 'above' / 'over': drone climbs directly above landmark (adjusting Z in NED, no subtraction from X)
+        - 'in front of': drone positions at standoff distance along approach vector (-X)
+        - 'behind': drone positions behind landmark (+X)
+        - 'to the left of': drone positions to the left (-Y in NED)
+        - 'to the right of': drone positions to the right (+Y in NED)
+        - default: approach with standard standoff distance and observation altitude
+        """
+        spatial = self.dialogue.parse_spatial_relation(name)
+        relation = spatial.get("relation", "DEFAULT")
+        dist_spec = spatial.get("distance")
+        base_name = spatial.get("base_landmark") or name
+
         elevations = {
             "fountain": (5.0, 8.0),
             "red building": (14.0, 16.0),
             "blue building": (14.0, 16.0),
             "tower": (22.0, 20.0),
-            "hospital": (10.0, 18.0),
+            "hospital": (14.0, 18.0),
         }
         alt_val, std_val = 5.0, 8.0
         for k, (a, s) in elevations.items():
-            if k in name.lower() or name.lower() in k:
+            if k in base_name.lower() or base_name.lower() in k:
                 alt_val, std_val = a, s
                 break
 
-        approach_pos = np.array([center_pos[0] - std_val, center_pos[1], -alt_val], dtype=float)
-        return approach_pos, alt_val
+        # Parse spatial components: compound, vertical offset, and horizontal relation
+        h_rel = spatial.get("horizontal_relation")
+        h_dist = spatial.get("horizontal_distance")
+        alt_offset = spatial.get("altitude_offset")
+
+        # 1. Vertical Target Altitude (Z coordinate in NED, negative is upwards)
+        # Landmark center is at center_pos[2]. If landmark is elevated (e.g. tower with Z = -22m),
+        # 'Xm above landmark' means Z = center_pos[2] - dist, ensuring drone altitude is -Z.
+        if relation in ("ABOVE", "OVER") or alt_offset is not None:
+            dist = alt_offset if alt_offset is not None else (float(dist_spec) if dist_spec is not None else alt_val)
+            target_z = float(center_pos[2] - dist)
+            target_alt = -target_z
+        else:
+            # Horizontal approach: maintain safe clearance above landmark base/elevation
+            target_z = float(min(center_pos[2] - 2.0, -alt_val)) if center_pos[2] < -2.0 else -alt_val
+            target_alt = -target_z
+
+        # 2. Horizontal Target Coordinates (X, Y)
+        horiz_mode = h_rel if h_rel is not None else relation
+        horiz_offset = float(h_dist) if h_dist is not None else (
+            float(dist_spec) if (dist_spec is not None and horiz_mode not in ("ABOVE", "OVER")) else std_val
+        )
+
+        x_target = float(center_pos[0])
+        y_target = float(center_pos[1])
+
+        if horiz_mode == "IN_FRONT":
+            x_target = center_pos[0] - horiz_offset
+        elif horiz_mode == "BEHIND":
+            x_target = center_pos[0] + horiz_offset
+        elif horiz_mode == "LEFT":
+            y_target = center_pos[1] - horiz_offset
+        elif horiz_mode == "RIGHT":
+            y_target = center_pos[1] + horiz_offset
+        elif horiz_mode in ("ABOVE", "OVER") and h_rel is None:
+            # Pure above/over: drone hovers directly over center of landmark
+            x_target = center_pos[0]
+            y_target = center_pos[1]
+        else:
+            # Default standoff approach along approach axis (-X)
+            x_target = center_pos[0] - std_val
+
+        approach_pos = np.array([x_target, y_target, target_z], dtype=float)
+        return approach_pos, target_alt
+
+    def resolve_landmark_position(self, name: str) -> Optional[np.ndarray]:
+        """Resolve 3D world position of a landmark from spatial memory or simulation world map."""
+        base_name = self.dialogue.extract_base_landmark(name)
+        prior = self.memory.find_landmark(base_name) or self.memory.find_landmark(name)
+        if prior is not None:
+            return np.asarray(prior["pos"], dtype=float)
+
+        mock_world = {
+            "fountain": np.array([32.0, 0.0, 0.0]),
+            "red building": np.array([75.0, 12.0, 0.0]),
+            "blue building": np.array([75.0, -14.0, 0.0]),
+            "tower": np.array([130.0, -10.0, 0.0]),
+            "hospital": np.array([60.0, -30.0, 0.0]),
+        }
+        for lm_name, lm_pos in mock_world.items():
+            if lm_name in base_name.lower() or base_name.lower() in lm_name:
+                return lm_pos
+        return None
 
     def _set_current_subgoal_target(self, index: int) -> None:
         """Set active tracking target to specified subgoal index."""
         if 0 <= index < len(self.subgoals):
             self.active_subgoal_index = index
             self.active_target_name = self.subgoals[index]
+            base_name = self.dialogue.extract_base_landmark(self.active_target_name)
 
-            # Check if this target is already remembered in spatial memory
-            prior = self.memory.find_landmark(self.active_target_name)
-            if prior is not None:
-                approach_pos, obs_alt = self._compute_approach_target(self.active_target_name, prior["pos"])
+            # Check if this subgoal is an orbit/circling command
+            if self.dialogue.is_orbit_command(self.active_target_name):
+                orbit_info = self.dialogue.parse_orbit_command(self.active_target_name)
+                if orbit_info:
+                    base_target = orbit_info["base_landmark"]
+                    pos = self.resolve_landmark_position(base_target)
+                    if pos is not None:
+                        self.flight_mode = "ORBIT"
+                        orbit_speed = orbit_info["speed"] if re.search(r'\b(?:speed|m/s|mps)\b', self.active_target_name, re.I) else self.flight.cruise_speed
+                        self.flight.set_orbit_target(
+                            center_xyz=pos,
+                            radius=orbit_info["radius"],
+                            altitude=orbit_info["altitude"],
+                            speed=orbit_speed,
+                            facing=orbit_info["facing"],
+                            revolutions=orbit_info["revolutions"],
+                            direction=orbit_info["direction"],
+                            target_name=orbit_info["target"]
+                        )
+                        self.narrator.emit_event(
+                            "ORBIT_STARTED",
+                            f"Orbiting {orbit_info['target']} at radius {orbit_info['radius']}m, altitude {orbit_info['altitude']}m ({orbit_info['facing']} facing).",
+                            orbit_info
+                        )
+                        return
+
+            # Check if this target is already remembered in spatial memory or simulation world
+            target_pos = self.resolve_landmark_position(base_name)
+            if target_pos is None:
+                target_pos = self.resolve_landmark_position(self.active_target_name)
+            if target_pos is not None:
+                approach_pos, obs_alt = self._compute_approach_target(self.active_target_name, target_pos)
                 self.flight.set_altitude(obs_alt)
                 self.flight.set_target(approach_pos)
                 self.narrator.notify_target_acquired(
@@ -190,36 +302,12 @@ class CityNavOrchestrator:
                     approach_pos
                 )
             else:
-                # In simulation mock mode, match against simulated world landmarks
-                mock_world = {
-                    "fountain": np.array([32.0, 0.0, 0.0]),
-                    "red building": np.array([75.0, 12.0, 0.0]),
-                    "blue building": np.array([75.0, -14.0, 0.0]),
-                    "tower": np.array([130.0, -10.0, 0.0]),
-                    "hospital": np.array([60.0, -30.0, 0.0]),
-                }
-                matched_mock = None
-                for lm_name, lm_pos in mock_world.items():
-                    if lm_name in self.active_target_name.lower() or self.active_target_name.lower() in lm_name:
-                        matched_mock = lm_pos
-                        break
-
-                if matched_mock is not None:
-                    approach_pos, obs_alt = self._compute_approach_target(self.active_target_name, matched_mock)
-                    self.flight.set_altitude(obs_alt)
-                    self.flight.set_target(approach_pos)
-                    self.narrator.notify_target_acquired(
-                        self.active_target_name,
-                        float(np.linalg.norm(approach_pos[:2] - np.array(self.flight.get_pose()[:2]))),
-                        approach_pos
-                    )
-                else:
-                    # Seek target via open-vocabulary perception sweep
-                    self.flight.set_target(None)
-                    self.narrator.emit_event(
-                        "TARGET_SEARCH",
-                        f"Seeking next subgoal '{self.active_target_name}'. Sweeping forward."
-                    )
+                # Seek target via open-vocabulary perception sweep
+                self.flight.set_target(None)
+                self.narrator.emit_event(
+                    "TARGET_SEARCH",
+                    f"Seeking next subgoal '{self.active_target_name}'. Sweeping forward."
+                )
 
     def _flight_loop(self) -> None:
         """20-30 Hz Continuous Flight Control Loop."""
@@ -241,11 +329,23 @@ class CityNavOrchestrator:
             # Execute single step of continuous proportional flight control
             state = self.flight.step_control(depth_map)
 
-            # Check waypoint arrival
-            if state.get("has_arrived", False) and self.flight_mode == "NAVIGATING":
+            # Check waypoint arrival or orbit / curve completion
+            if state.get("has_arrived", False) and self.flight_mode in ("NAVIGATING", "ORBIT", "CURVE"):
                 with self._state_lock:
                     arrived_target = self.active_target_name or "subgoal"
-                    self.narrator.notify_waypoint_reached(arrived_target)
+                    if self.flight_mode == "ORBIT":
+                        self.narrator.emit_event(
+                            "ORBIT_COMPLETED",
+                            f"Completed orbit revolutions around {arrived_target}. Holding stationary hover."
+                        )
+                    elif self.flight_mode == "CURVE":
+                        self.narrator.emit_event(
+                            "CURVE_COMPLETED",
+                            "Completed continuous waypoint curve trajectory. Holding stationary hover."
+                        )
+                    else:
+                        self.narrator.notify_waypoint_reached(arrived_target)
+
                     next_idx = self.active_subgoal_index + 1
                     if next_idx < len(self.subgoals):
                         self._set_current_subgoal_target(next_idx)
@@ -285,12 +385,19 @@ class CityNavOrchestrator:
             if detections:
                 self.memory.add_observations(detections)
 
-            # Dynamic target locking: if searching for active subgoal and landmark detected
+            # Dynamic target locking: only seek and acquire targets when in active NAVIGATING mode
             with self._state_lock:
-                if self.active_target_name and self.flight.target_position is None:
+                if (
+                    self.flight_mode == "NAVIGATING"
+                    and not self.flight.is_orbiting
+                    and not self.flight.is_following_path
+                    and self.active_target_name
+                    and self.flight.target_position is None
+                ):
+                    base_target = self.dialogue.extract_base_landmark(self.active_target_name)
                     for det in detections:
-                        if self.active_target_name.lower() in det["name"].lower():
-                            approach_pos, obs_alt = self._compute_approach_target(det["name"], det["world_pos"])
+                        if base_target.lower() in det["name"].lower() or det["name"].lower() in base_target.lower():
+                            approach_pos, obs_alt = self._compute_approach_target(self.active_target_name, det["world_pos"])
                             self.flight.set_altitude(obs_alt)
                             self.flight.set_target(approach_pos)
                             self.narrator.notify_target_acquired(
@@ -317,6 +424,7 @@ class CityNavOrchestrator:
         """Asynchronous Operator Interruption and Cadence Commentary Loop."""
         print("[CognitiveLoop] Started Asynchronous Cognitive Worker.")
         last_cadence_time = time.time()
+        last_maintenance_time = time.time()
 
         while self.running:
             time.sleep(0.1)  # 10 Hz check
@@ -335,13 +443,34 @@ class CityNavOrchestrator:
                     self.narrator.notify_interruption(intent, f"{reply} (Target: {target})")
 
                     with self._state_lock:
+                        if intent == "MULTI_SUBGOAL_MISSION":
+                            instruction = result.get("instruction") or result.get("raw_message")
+                            if instruction:
+                                self.start_mission(instruction)
+                            continue
+
+                        # Ensure vehicle is airborne if operator sends a flight maneuver while grounded
+                        if intent in ("TARGET_CORRECTION", "ORBIT_CIRCLE", "WAYPOINT_PATH", "RETURN_TO_PAST") and not self.flight.is_in_air:
+                            takeoff_alt = float(result.get("altitude", self.config.flight.takeoff_altitude))
+                            self.flight.takeoff(altitude=takeoff_alt)
+                            self.narrator.emit_event(
+                                "TAKEOFF_COMPLETED",
+                                f"Autonomous takeoff initiated. Climbing to {takeoff_alt:.1f}m.",
+                                {"altitude": takeoff_alt}
+                            )
+
                         if intent == "TARGET_CORRECTION" and target:
                             self.active_target_name = target
+                            base_target = result.get("base_landmark") or self.dialogue.extract_base_landmark(target)
                             # Ensure perception vocabulary recognizes target deterministically
-                            vocab = list(dict.fromkeys([target.lower()] + [s.lower() for s in self.subgoals] + self.config.perception.default_classes))
+                            vocab = list(dict.fromkeys(
+                                [base_target.lower()] +
+                                [self.dialogue.extract_base_landmark(s).lower() for s in self.subgoals] +
+                                self.config.perception.default_classes
+                            ))
                             self.perception.update_target_vocabulary(vocab)
                             # Check if known in memory
-                            known = self.memory.find_landmark(target)
+                            known = self.memory.find_landmark(base_target) or self.memory.find_landmark(target)
                             if known:
                                 approach_pos, obs_alt = self._compute_approach_target(target, known["pos"])
                                 self.flight.set_altitude(obs_alt)
@@ -354,7 +483,7 @@ class CityNavOrchestrator:
                                     "tower": np.array([130.0, -10.0, 0.0]),
                                     "hospital": np.array([60.0, -30.0, 0.0]),
                                 }
-                                matched = next((pos for name, pos in mock_world.items() if target.lower() in name or name in target.lower()), None)
+                                matched = next((pos for name, pos in mock_world.items() if base_target.lower() in name or name in base_target.lower()), None)
                                 if matched is not None:
                                     approach_pos, obs_alt = self._compute_approach_target(target, matched)
                                     self.flight.set_altitude(obs_alt)
@@ -379,6 +508,73 @@ class CityNavOrchestrator:
                                     f"Landmark '{target}' not yet located in spatial memory."
                                 )
 
+                        elif intent == "ORBIT_CIRCLE":
+                            self.active_target_name = target or "orbit"
+                            base_target = result.get("base_landmark") or self.dialogue.extract_base_landmark(self.active_target_name)
+                            radius = float(result.get("radius", 16.0))
+                            alt = float(result.get("altitude", 10.0))
+                            raw_msg = str(result.get("raw_message", "")).lower()
+                            spd = float(result["speed"]) if (result.get("speed") and any(w in raw_msg for w in ["speed", "m/s", "mps"])) else self.flight.cruise_speed
+                            facing = result.get("facing", "INWARD")
+                            revs = result.get("revolutions")
+                            direction = result.get("direction", "CCW")
+
+                            # Ensure perception vocabulary recognizes target deterministically
+                            vocab = list(dict.fromkeys(
+                                [base_target.lower()] +
+                                [self.dialogue.extract_base_landmark(s).lower() for s in self.subgoals] +
+                                self.config.perception.default_classes
+                            ))
+                            self.perception.update_target_vocabulary(vocab)
+
+                            pos = self.resolve_landmark_position(base_target)
+                            if pos is None:
+                                pos = self.resolve_landmark_position(self.active_target_name)
+                            if pos is not None:
+                                self.flight.set_orbit_target(
+                                    center_xyz=pos,
+                                    radius=radius,
+                                    altitude=alt,
+                                    speed=spd,
+                                    facing=facing,
+                                    revolutions=revs,
+                                    direction=direction,
+                                    target_name=self.active_target_name
+                                )
+                                self.flight_mode = "ORBIT"
+                                self.narrator.emit_event(
+                                    "ORBIT_STARTED",
+                                    f"Operator commanded orbit: circling {self.active_target_name} at {radius:.1f}m radius, {alt:.1f}m altitude ({facing} facing).",
+                                    result
+                                )
+                            else:
+                                self.flight.set_target(None)
+                                self.flight_mode = "NAVIGATING"
+                                self.narrator.emit_event(
+                                    "TARGET_SEARCH",
+                                    f"Searching for '{base_target}' to initiate circular orbit..."
+                                )
+
+                        elif intent == "WAYPOINT_PATH":
+                            wps = result.get("waypoints") or []
+                            raw_msg = str(result.get("raw_message", "")).lower()
+                            spd = float(result["speed"]) if (result.get("speed") and any(w in raw_msg for w in ["speed", "m/s", "mps"])) else self.flight.cruise_speed
+                            facing = result.get("facing", "TANGENT")
+                            if wps:
+                                self.flight.set_trajectory_path(
+                                    waypoints=wps,
+                                    speed=spd,
+                                    facing=facing,
+                                    target_name=result.get("target", "waypoint_curve")
+                                )
+                                self.flight_mode = "CURVE"
+                                self.active_target_name = result.get("target", "curve")
+                                self.narrator.emit_event(
+                                    "TRAJECTORY_FOLLOWING",
+                                    f"Executing continuous waypoint curve with {len(wps)} 3D points at {spd:.1f} m/s.",
+                                    {"waypoints_count": len(wps)}
+                                )
+
                         elif intent == "HOVER_STOP":
                             self.flight_mode = "HOVERING"
                             self.flight.hover()
@@ -393,8 +589,14 @@ class CityNavOrchestrator:
                                 f"Climbing/adjusting altitude to {new_alt:.1f} meters."
                             )
 
-            # 2. Cadence commentary (every 4 seconds)
+            # 2. Periodic spatial memory maintenance & deduplication (every 3 seconds)
             now = time.time()
+            if now - last_maintenance_time >= 3.0:
+                last_maintenance_time = now
+                self.memory.clean_registry(dedup=True, max_stale_sec=self.config.memory.max_retention_sec)
+                self.memory.prune_unconfirmed(min_count=2, max_age_sec=15.0)
+
+            # 3. Cadence commentary (every 4 seconds)
             if now - last_cadence_time >= self.config.cognitive.narration_cadence_sec:
                 last_cadence_time = now
                 if self.flight.is_in_air:
@@ -405,6 +607,15 @@ class CityNavOrchestrator:
                     self.narrator.notify_cadence(
                         self.active_target_name, curr_spd, -curr_z, dist
                     )
+
+    def clean_spatial_memory(self) -> Dict[str, int]:
+        """Perform on-demand deduplication and maintenance of spatial memory."""
+        return self.memory.clean_registry(
+            dedup=True,
+            max_stale_sec=self.config.memory.max_retention_sec,
+            prune_unconfirmed_older_than=30.0,
+            min_confirmed_count=2
+        )
 
     def _acquire_frames(self) -> Tuple[np.ndarray, np.ndarray]:
         """Fetch RGB and metric depth images from AirSim or generate synthetic frames."""
@@ -576,6 +787,17 @@ class CityNavOrchestrator:
             subgoals = list(self.subgoals)
             subgoal_idx = self.active_subgoal_index
 
+        # If orbiting, override distance with radial clearance to target circle
+        if self.flight.is_orbiting and self.flight.orbit_center is not None:
+            dx = curr_x - self.flight.orbit_center[0]
+            dy = curr_y - self.flight.orbit_center[1]
+            dist = abs(math.hypot(dx, dy) - self.flight.orbit_radius)
+            mode = "ORBIT"
+        elif self.flight.is_following_path:
+            mode = "CURVE"
+
+        orbit_telem = self.flight.get_orbit_telemetry()
+
         return {
             "mode": mode,
             "is_mock": self.flight.mock,
@@ -592,20 +814,31 @@ class CityNavOrchestrator:
             "avoidance_direction": self.flight.last_avoidance_direction,
             "fps": round(self.perception.last_fps, 1),
             "perception_latency_ms": round(self.perception.last_inference_latency_ms, 1),
-            "projection_latency_ms": round(self.perception.last_projection_latency_ms, 2)
+            "projection_latency_ms": round(self.perception.last_projection_latency_ms, 2),
+            "is_orbiting": orbit_telem["is_orbiting"],
+            "orbit_center": orbit_telem["orbit_center"],
+            "orbit_radius": orbit_telem["orbit_radius"],
+            "orbit_target": orbit_telem["orbit_target"],
+            "orbit_facing": orbit_telem["orbit_facing"],
+            "revolution_count": orbit_telem["revolution_count"],
+            "is_following_path": orbit_telem["is_following_path"],
         }
 
-    def start(self) -> None:
+    def start(self, start_dashboard: Optional[bool] = None) -> None:
         """Start all orchestrator threads and dashboard server."""
         self.running = True
 
-        # 1. Start Dashboard Web Server
-        self._dashboard_server = DashboardServer(
-            self,
-            host=self.config.dashboard.host,
-            port=self.config.dashboard.port
-        )
-        self._dashboard_server.start()
+        if start_dashboard is None:
+            start_dashboard = self.config.dashboard.enabled
+
+        # 1. Start Dashboard Web Server if enabled
+        if start_dashboard:
+            self._dashboard_server = DashboardServer(
+                self,
+                host=self.config.dashboard.host,
+                port=self.config.dashboard.port
+            )
+            self._dashboard_server.start()
 
         # 2. Launch high-frequency perception worker
         self._perception_thread = threading.Thread(
@@ -625,11 +858,12 @@ class CityNavOrchestrator:
         )
         self._cognitive_thread.start()
 
-        print("\n========================================================")
-        print(" CityNav Real-Time Autonomous Flight System Active!")
-        print(f" Dashboard URL: http://localhost:{self.config.dashboard.port}")
-        print(" Press Ctrl+C in terminal to stop.")
-        print("========================================================\n")
+        if start_dashboard:
+            print("\n========================================================")
+            print(" CityNav Real-Time Autonomous Flight System Active!")
+            print(f" Dashboard URL: http://localhost:{self.config.dashboard.port}")
+            print(" Press Ctrl+C in terminal to stop.")
+            print("========================================================\n")
 
     def stop(self) -> None:
         """Signal all threads to shut down and land drone."""
@@ -648,11 +882,14 @@ def main():
     parser.add_argument("--speed", type=float, default=4.0, help="Cruise speed in m/s")
     parser.add_argument("--port", type=int, default=5000, help="Dashboard web port")
     parser.add_argument("--instruction", type=str, default="", help="Initial navigation instruction")
+    parser.add_argument("--api-key", "--gemini-key", type=str, default="", help="Gemini 2.0 Flash API Key")
     args = parser.parse_args()
 
     cfg = SystemConfig()
     cfg.flight.cruise_speed = args.speed
     cfg.dashboard.port = args.port
+    if args.api_key:
+        cfg.cognitive.api_key = args.api_key
     if args.mock:
         cfg.mock_airsim = True
         cfg.mock_perception = True

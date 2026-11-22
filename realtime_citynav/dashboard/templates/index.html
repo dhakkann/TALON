@@ -99,46 +99,86 @@
   <!-- Main View Grid -->
   <main class="flex-1 grid grid-cols-12 gap-3 p-3 overflow-hidden">
     
-    <!-- LEFT COLUMN: Live Camera Feed & Telemetry HUD (7 Cols) -->
+    <!-- LEFT COLUMN: Primary Display & Telemetry (7 Cols) -->
     <section class="col-span-7 flex flex-col bg-drone-card border border-drone-border rounded-lg overflow-hidden glow-box-cyan">
       <div class="px-4 py-2 bg-[#0d1424] border-b border-drone-border flex items-center justify-between">
-        <div class="flex items-center space-x-2">
-          <span class="h-2 w-2 rounded-full bg-red-500 animate-ping"></span>
-          <span class="font-bold text-xs uppercase tracking-wider text-slate-300">Front Camera Feed (30 FPS | YOLO-World v2)</span>
+        <div class="flex items-center space-x-3">
+          <!-- View switcher tabs -->
+          <div class="flex items-center bg-[#070b14] p-0.5 rounded border border-drone-border text-xs mono">
+            <button id="tab-cam" onclick="switchView('cam')" class="px-2.5 py-1 rounded bg-drone-cyan text-slate-950 font-bold transition flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 rounded-full bg-red-500 animate-ping"></span> Camera Feed
+            </button>
+            <button id="tab-3d" onclick="switchView('3d')" class="px-2.5 py-1 rounded text-slate-400 hover:text-white transition flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 rounded-full bg-cyan-400"></span> 3D World View
+            </button>
+            <button id="tab-split" onclick="switchView('split')" class="px-2.5 py-1 rounded text-slate-400 hover:text-white transition">
+              Split Dual View
+            </button>
+          </div>
         </div>
-        <div class="mono text-xs text-slate-400 flex items-center space-x-4">
-          <span>LATENCY: <span id="stat-latency" class="text-drone-emerald">12 ms</span></span>
-          <span>FPS: <span id="stat-fps" class="text-drone-cyan">30.0</span></span>
+
+        <div class="flex items-center space-x-3">
+          <!-- 3D Camera Controls Toolbar (visible when 3D or split view is active) -->
+          <div id="controls-3d-toolbar" class="hidden flex items-center space-x-1 mono text-[10px]">
+            <button onclick="set3DPreset('orbit')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded border border-slate-700">Orbit</button>
+            <button onclick="set3DPreset('topdown')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700">Top-Down</button>
+            <button onclick="set3DPreset('chase')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700">Chase</button>
+          </div>
+
+          <div class="mono text-xs text-slate-400 flex items-center space-x-3">
+            <span>LATENCY: <span id="stat-latency" class="text-drone-emerald">12 ms</span></span>
+            <span>FPS: <span id="stat-fps" class="text-drone-cyan">30.0</span></span>
+          </div>
         </div>
       </div>
 
-      <!-- Video Feed Container -->
-      <div class="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
-        <img id="live-stream" src="/video_feed" alt="Live Camera Feed" class="w-full h-full object-contain" />
+      <!-- Main Display View Container -->
+      <div id="display-container" class="relative flex-1 bg-black overflow-hidden flex">
         
-        <!-- HUD Overlay Elements -->
-        <div class="hud-overlay p-4 flex flex-col justify-between">
-          <div class="flex justify-between items-start">
-            <div class="bg-black/60 backdrop-blur border border-cyan-500/30 px-3 py-1.5 rounded mono text-xs space-y-0.5">
-              <div>TARGET: <span id="hud-target" class="text-drone-emerald font-bold">SEARCHING</span></div>
-              <div>DIST: <span id="hud-dist" class="text-white">--</span></div>
+        <!-- View Pane 1: Camera Feed Container -->
+        <div id="pane-camera" class="relative flex-1 h-full bg-black flex items-center justify-center overflow-hidden">
+          <img id="live-stream" src="/video_feed" alt="Live Camera Feed" class="w-full h-full object-contain" />
+          
+          <!-- HUD Overlay Elements -->
+          <div class="hud-overlay p-4 flex flex-col justify-between">
+            <div class="flex justify-between items-start">
+              <div class="bg-black/60 backdrop-blur border border-cyan-500/30 px-3 py-1.5 rounded mono text-xs space-y-0.5">
+                <div>TARGET: <span id="hud-target" class="text-drone-emerald font-bold">SEARCHING</span></div>
+                <div>DIST: <span id="hud-dist" class="text-white">--</span></div>
+              </div>
+              <div class="bg-black/60 backdrop-blur border border-cyan-500/30 px-3 py-1.5 rounded mono text-xs space-y-0.5 text-right">
+                <div>X: <span id="hud-x" class="text-slate-300">0.0</span> | Y: <span id="hud-y" class="text-slate-300">0.0</span></div>
+                <div>YAW: <span id="hud-yaw" class="text-drone-cyan">0.0°</span></div>
+              </div>
             </div>
-            <div class="bg-black/60 backdrop-blur border border-cyan-500/30 px-3 py-1.5 rounded mono text-xs space-y-0.5 text-right">
-              <div>X: <span id="hud-x" class="text-slate-300">0.0</span> | Y: <span id="hud-y" class="text-slate-300">0.0</span></div>
-              <div>YAW: <span id="hud-yaw" class="text-drone-cyan">0.0°</span></div>
+
+            <!-- Avoidance warning popup -->
+            <div id="avoidance-banner" class="hidden self-center bg-rose-950/80 border border-rose-500 text-rose-300 px-4 py-1.5 rounded-full mono text-xs font-bold animate-bounce">
+              APF OBSTACLE AVOIDANCE ENGAGED
             </div>
-          </div>
 
-          <!-- Avoidance warning popup -->
-          <div id="avoidance-banner" class="hidden self-center bg-rose-950/80 border border-rose-500 text-rose-300 px-4 py-1.5 rounded-full mono text-xs font-bold animate-bounce">
-            APF OBSTACLE AVOIDANCE ENGAGED
-          </div>
-
-          <div class="flex justify-between items-end mono text-xs text-slate-400">
-            <div>CAM: FRONT_CENTER 90° FOV</div>
-            <div>RES: 640x480 RGB-D</div>
+            <div class="flex justify-between items-end mono text-xs text-slate-400">
+              <div>CAM: FRONT_CENTER 90° FOV</div>
+              <div>RES: 640x480 RGB-D</div>
+            </div>
           </div>
         </div>
+
+        <!-- View Pane 2: 3D Tactical World Canvas -->
+        <div id="pane-3d" class="relative hidden flex-1 h-full bg-[#050811] overflow-hidden">
+          <canvas id="dashboard-canvas3d" class="w-full h-full block"></canvas>
+          
+          <!-- 3D Navigation Compass Overlay -->
+          <div class="absolute bottom-2 left-3 pointer-events-none mono text-[10px] text-slate-400 flex items-center space-x-3 bg-black/60 px-2.5 py-1 rounded border border-white/10 backdrop-blur">
+            <div><span class="text-red-400 font-bold">+X</span> North</div>
+            <div><span class="text-emerald-400 font-bold">+Y</span> East</div>
+            <div><span class="text-cyan-400 font-bold">-Z</span> Altitude</div>
+          </div>
+          <div class="absolute bottom-2 right-3 pointer-events-none mono text-[10px] text-slate-400 bg-black/60 px-2.5 py-1 rounded border border-white/10 backdrop-blur">
+            <span>Drag: Orbit | Wheel: Zoom | Shift+Drag: Pan</span>
+          </div>
+        </div>
+
       </div>
 
       <!-- Route Instruction Input Bar -->
@@ -181,6 +221,12 @@
 
         <!-- Quick Action Chips -->
         <div class="flex flex-wrap gap-1.5 pt-1">
+          <button onclick="sendQuickChat('hover in circle around blue building')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 rounded transition font-bold">
+            Orbit: Blue Building
+          </button>
+          <button onclick="sendQuickChat('circle twice facing forward around blue building')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded transition">
+            Circle 2x Tangent
+          </button>
           <button onclick="sendQuickChat('no, the blue building')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-drone-cyan border border-slate-700 rounded transition">
             Target: Blue Building
           </button>
@@ -267,57 +313,112 @@
       };
     }
 
+    function setInnerText(id, text) {
+      const el = document.getElementById(id);
+      if (el) el.innerText = text;
+    }
+
     function updateDashboard(data) {
       if (!data) return;
       const tel = data.telemetry || {};
 
       // Badges
       if (tel.altitude !== undefined) {
-        document.getElementById("badge-alt").innerText = tel.altitude.toFixed(1) + " m";
+        setInnerText("badge-alt", tel.altitude.toFixed(1) + " m");
       }
       if (tel.speed !== undefined) {
-        document.getElementById("badge-speed").innerText = tel.speed.toFixed(1) + " m/s";
+        setInnerText("badge-speed", tel.speed.toFixed(1) + " m/s");
       }
       if (tel.mode) {
-        document.getElementById("badge-mode").innerText = tel.mode.toUpperCase();
+        const bMode = document.getElementById("badge-mode");
+        if (bMode) {
+          const m = tel.mode.toUpperCase();
+          if (m === "ORBIT" || tel.is_orbiting) {
+            const revCount = (tel.revolution_count !== undefined && tel.revolution_count !== null) ? tel.revolution_count.toFixed(1) : "0.0";
+            bMode.innerText = "MODE: ORBIT (" + revCount + " revs)";
+            bMode.className = "px-2 py-0.5 rounded bg-cyan-950 text-drone-cyan border border-cyan-500 font-bold glow-box-cyan animate-pulse";
+          } else if (m === "CURVE" || tel.is_following_path) {
+            bMode.innerText = "MODE: CURVE";
+            bMode.className = "px-2 py-0.5 rounded bg-purple-950 text-purple-400 border border-purple-500 font-bold glow-box-cyan animate-pulse";
+          } else if (m === "NAVIGATING") {
+            bMode.innerText = "MODE: NAVIGATING";
+            bMode.className = "px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800 font-bold";
+          } else if (m === "HOVERING") {
+            bMode.innerText = "MODE: HOVERING";
+            bMode.className = "px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800 font-bold";
+          } else {
+            bMode.innerText = m;
+            bMode.className = "px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold";
+          }
+        }
       }
       if (tel.is_mock !== undefined) {
-        document.getElementById("badge-sim").innerText = tel.is_mock ? "KINEMATIC MOCK" : "AIRSIM CONNECTED";
-        document.getElementById("badge-sim").className = tel.is_mock ? "text-amber-400 font-bold" : "text-emerald-400 font-bold";
+        const bSim = document.getElementById("badge-sim");
+        if (bSim) {
+          bSim.innerText = tel.is_mock ? "KINEMATIC MOCK" : "AIRSIM CONNECTED";
+          bSim.className = tel.is_mock ? "text-amber-400 font-bold" : "text-emerald-400 font-bold";
+        }
       }
 
       // HUD
-      if (tel.position) {
-        document.getElementById("hud-x").innerText = tel.position[0].toFixed(1);
-        document.getElementById("hud-y").innerText = tel.position[1].toFixed(1);
+      if (tel.position && tel.position.length >= 2) {
+        setInnerText("hud-x", tel.position[0].toFixed(1));
+        setInnerText("hud-y", tel.position[1].toFixed(1));
       }
       if (tel.yaw !== undefined) {
         const deg = (tel.yaw * 180 / Math.PI).toFixed(0);
-        document.getElementById("hud-yaw").innerText = deg + "°";
+        setInnerText("hud-yaw", deg + "°");
       }
       if (tel.active_target) {
-        document.getElementById("hud-target").innerText = tel.active_target.toUpperCase();
+        setInnerText("hud-target", tel.active_target.toUpperCase());
       } else {
-        document.getElementById("hud-target").innerText = "SEARCHING";
+        setInnerText("hud-target", "SEARCHING");
       }
       if (tel.distance_to_target !== null && tel.distance_to_target !== undefined) {
-        document.getElementById("hud-dist").innerText = tel.distance_to_target.toFixed(1) + " m";
+        setInnerText("hud-dist", tel.distance_to_target.toFixed(1) + " m");
       } else {
-        document.getElementById("hud-dist").innerText = "--";
+        setInnerText("hud-dist", "--");
       }
 
       // Avoidance banner
       const banner = document.getElementById("avoidance-banner");
-      if (tel.obstacle_avoidance) {
-        banner.classList.remove("hidden");
-        banner.innerText = "APF AVOIDANCE: DEFLECTING " + (tel.avoidance_direction || "CLEAR");
-      } else {
-        banner.classList.add("hidden");
+      if (banner) {
+        if (tel.obstacle_avoidance) {
+          banner.classList.remove("hidden");
+          banner.innerText = "APF AVOIDANCE: DEFLECTING " + (tel.avoidance_direction || "CLEAR");
+        } else {
+          banner.classList.add("hidden");
+        }
       }
 
       // Performance stats
-      if (tel.fps) document.getElementById("stat-fps").innerText = tel.fps.toFixed(1);
-      if (tel.perception_latency_ms) document.getElementById("stat-latency").innerText = tel.perception_latency_ms.toFixed(1) + " ms";
+      if (tel.fps) setInnerText("stat-fps", tel.fps.toFixed(1));
+      if (tel.perception_latency_ms !== undefined) {
+        setInnerText("stat-latency", tel.perception_latency_ms.toFixed(1) + " ms");
+      }
+
+      // 3D Tactical World State Update
+      if (tel.position && tel.position.length >= 3) {
+        drone3D.x = tel.position[0];
+        drone3D.y = tel.position[1];
+        drone3D.z = tel.position[2];
+      }
+      if (typeof tel.yaw === 'number') drone3D.yaw = tel.yaw;
+      if (typeof tel.speed === 'number') drone3D.speed = tel.speed;
+      if (tel.active_target) drone3D.targetName = tel.active_target;
+
+      drone3D.isOrbiting = !!tel.is_orbiting;
+      drone3D.orbitCenter = tel.orbit_center || null;
+      drone3D.orbitRadius = tel.orbit_radius || 16.0;
+      drone3D.orbitTarget = tel.orbit_target || '';
+      drone3D.revolutionCount = tel.revolution_count || 0.0;
+      drone3D.isFollowingPath = !!tel.is_following_path;
+
+      if (drone3D.history.length === 0 || 
+          Math.hypot(drone3D.x - drone3D.history[drone3D.history.length - 1].x, drone3D.y - drone3D.history[drone3D.history.length - 1].y) > 0.8) {
+        drone3D.history.push({ x: drone3D.x, y: drone3D.y, z: drone3D.z });
+        if (drone3D.history.length > 250) drone3D.history.shift();
+      }
 
       // Subgoals rendering
       if (tel.subgoals && tel.subgoals.length > 0) {
@@ -337,6 +438,7 @@
 
     function renderSubgoals(subgoals, activeIdx) {
       const container = document.getElementById("subgoals-list");
+      if (!container) return;
       container.innerHTML = "";
       subgoals.forEach((sg, idx) => {
         const el = document.createElement("span");
@@ -356,6 +458,8 @@
 
     function renderNarrations(narrations) {
       const log = document.getElementById("narration-log");
+      if (!log) return;
+      if (!narrations || narrations.length === 0) return;
       log.innerHTML = "";
       narrations.forEach(n => {
         const row = document.createElement("div");
@@ -366,14 +470,15 @@
         else if (n.event_type === "WAYPOINT_REACHED") badgeColor = "bg-emerald-950 text-emerald-400 border border-emerald-800";
         else if (n.event_type === "OBSTACLE_AVOIDANCE") badgeColor = "bg-rose-950 text-rose-400 border border-rose-800";
         else if (n.event_type === "OPERATOR_INPUT" || n.event_type === "INTERRUPTION_HANDLED") badgeColor = "bg-amber-950 text-amber-300 border border-amber-800";
+        else if (n.event_type === "MISSION_COMPLETED") badgeColor = "bg-emerald-900 text-emerald-300 border border-emerald-700";
 
-        const timeStr = new Date(n.timestamp * 1000).toLocaleTimeString();
+        const timeStr = n.timestamp ? new Date(n.timestamp * 1000).toLocaleTimeString() : "";
         row.innerHTML = `
           <div class="flex items-center justify-between text-[10px]">
-            <span class="px-1.5 py-0.2 rounded font-bold ${badgeColor}">${n.event_type}</span>
+            <span class="px-1.5 py-0.2 rounded font-bold ${badgeColor}">${n.event_type || 'EVENT'}</span>
             <span class="text-slate-500">${timeStr}</span>
           </div>
-          <div class="text-slate-200">${n.message}</div>
+          <div class="text-slate-200">${n.message || ''}</div>
         `;
         log.appendChild(row);
       });
@@ -382,7 +487,9 @@
 
     function renderLandmarks(landmarks) {
       const tbody = document.getElementById("landmarks-tbody");
-      document.getElementById("stat-landmark-count").innerText = landmarks.length + " landmarks";
+      if (!tbody) return;
+      const countEl = document.getElementById("stat-landmark-count");
+      if (countEl) countEl.innerText = (landmarks ? landmarks.length : 0) + " landmarks";
       if (!landmarks || landmarks.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-500 italic">No landmarks registered yet</td></tr>';
         return;
@@ -392,11 +499,14 @@
         const tr = document.createElement("tr");
         tr.className = "hover:bg-slate-800/40";
         const p = l.pos || [0, 0, 0];
+        const p0 = (typeof p[0] === 'number') ? p[0].toFixed(1) : '0.0';
+        const p1 = (typeof p[1] === 'number') ? p[1].toFixed(1) : '0.0';
+        const p2 = (typeof p[2] === 'number') ? p[2].toFixed(1) : '0.0';
         tr.innerHTML = `
-          <td class="py-1 px-3 text-cyan-400 font-bold">${l.id}</td>
-          <td class="py-1 px-3 text-white font-medium">${l.name}</td>
-          <td class="py-1 px-3 text-slate-400">[${p[0].toFixed(1)}, ${p[1].toFixed(1)}, ${p[2].toFixed(1)}]</td>
-          <td class="py-1 px-3 text-amber-400 font-bold">${l.count}x</td>
+          <td class="py-1 px-3 text-cyan-400 font-bold">${l.id || 1}</td>
+          <td class="py-1 px-3 text-white font-medium">${l.name || 'landmark'}</td>
+          <td class="py-1 px-3 text-slate-400">[${p0}, ${p1}, ${p2}]</td>
+          <td class="py-1 px-3 text-amber-400 font-bold">${l.count || 1}x</td>
         `;
         tbody.appendChild(tr);
       });
@@ -438,8 +548,445 @@
       fetch("/api/stop", { method: "POST" });
     }
 
+    // --- 3D TACTICAL WORLD VIEW INTEGRATION ---
+    let currentViewMode = 'cam'; // 'cam', '3d', 'split'
+    const LANDMARKS_3D = [
+      { id: 'fountain', name: 'Fountain Plaza', type: 'fountain', x: 32.0, y: 0.0, z: 0.0, radius: 4.5, height: 2.2, color: '#00d4ff' },
+      { id: 'red_building', name: 'Red Building', type: 'building', x: 75.0, y: 12.0, z: 0.0, w: 12.0, d: 12.0, h: 18.0, color: '#ef4444', roofColor: '#991b1b', labelColor: '#fca5a5' },
+      { id: 'blue_building', name: 'Blue Building', type: 'building', x: 75.0, y: -14.0, z: 0.0, w: 12.0, d: 12.0, h: 18.0, color: '#3b82f6', roofColor: '#1e40af', labelColor: '#93c5fd' },
+      { id: 'tower', name: 'Metropolitan Tower', type: 'building', x: 130.0, y: -10.0, z: 0.0, w: 8.0, d: 8.0, h: 32.0, color: '#a855f7', roofColor: '#6b21a8', labelColor: '#d8b4fe' },
+      { id: 'hospital', name: 'General Hospital', type: 'building', x: 60.0, y: -30.0, z: 0.0, w: 16.0, d: 16.0, h: 12.0, color: '#f8fafc', roofColor: '#cbd5e1', labelColor: '#ffffff', isHospital: true }
+    ];
+
+    let drone3D = {
+      x: 0.0, y: 0.0, z: -5.0, yaw: 0.0, speed: 0.0,
+      targetName: '', targetPos: null, history: [],
+      isOrbiting: false, orbitCenter: null, orbitRadius: 16.0,
+      orbitTarget: '', revolutionCount: 0.0, isFollowingPath: false
+    };
+
+    let cam3D = {
+      dist: 110.0, pitch: 0.65, yaw: 0.55,
+      focusX: 65.0, focusY: -5.0, focusZ: -10.0,
+      mode: 'orbit', isDragging: false, lastX: 0, lastY: 0, isShift: false
+    };
+
+    let canvas3D = null;
+    let ctx3D = null;
+    let rotorAngle3D = 0;
+
+    function switchView(mode) {
+      currentViewMode = mode;
+      const paneCam = document.getElementById("pane-camera");
+      const pane3D = document.getElementById("pane-3d");
+      const toolbar3D = document.getElementById("controls-3d-toolbar");
+      const btnCam = document.getElementById("tab-cam");
+      const btn3D = document.getElementById("tab-3d");
+      const btnSplit = document.getElementById("tab-split");
+
+      [btnCam, btn3D, btnSplit].forEach(b => {
+        b.className = "px-2.5 py-1 rounded text-slate-400 hover:text-white transition";
+      });
+
+      if (mode === 'cam') {
+        paneCam.classList.remove("hidden");
+        paneCam.style.width = "100%";
+        pane3D.classList.add("hidden");
+        toolbar3D.classList.add("hidden");
+        btnCam.className = "px-2.5 py-1 rounded bg-drone-cyan text-slate-950 font-bold transition flex items-center gap-1.5";
+      } else if (mode === '3d') {
+        paneCam.classList.add("hidden");
+        pane3D.classList.remove("hidden");
+        pane3D.style.width = "100%";
+        toolbar3D.classList.remove("hidden");
+        btn3D.className = "px-2.5 py-1 rounded bg-drone-cyan text-slate-950 font-bold transition flex items-center gap-1.5";
+        resize3DCanvas();
+      } else if (mode === 'split') {
+        paneCam.classList.remove("hidden");
+        paneCam.style.width = "50%";
+        pane3D.classList.remove("hidden");
+        pane3D.style.width = "50%";
+        toolbar3D.classList.remove("hidden");
+        btnSplit.className = "px-2.5 py-1 rounded bg-drone-cyan text-slate-950 font-bold transition";
+        resize3DCanvas();
+      }
+    }
+
+    function set3DPreset(preset) {
+      cam3D.mode = preset;
+      if (preset === 'orbit') {
+        cam3D.dist = 110.0; cam3D.pitch = 0.65; cam3D.yaw = 0.55;
+        cam3D.focusX = 65.0; cam3D.focusY = -5.0; cam3D.focusZ = -10.0;
+      } else if (preset === 'topdown') {
+        cam3D.dist = 135.0; cam3D.pitch = 1.50; cam3D.yaw = 0.0;
+        cam3D.focusX = 65.0; cam3D.focusY = -5.0; cam3D.focusZ = 0.0;
+      } else if (preset === 'chase') {
+        cam3D.dist = 30.0; cam3D.pitch = 0.35;
+      }
+    }
+
+    function resize3DCanvas() {
+      if (!canvas3D) return;
+      const rect = canvas3D.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      if (rect.width > 0 && rect.height > 0) {
+        canvas3D.width = rect.width * dpr;
+        canvas3D.height = rect.height * dpr;
+        ctx3D.scale(dpr, dpr);
+      }
+    }
+
+    function projectPoint(px, py, pz, W, H) {
+      const cosP = Math.cos(cam3D.pitch), sinP = Math.sin(cam3D.pitch);
+      const cosY = Math.cos(cam3D.yaw), sinY = Math.sin(cam3D.yaw);
+
+      const eyeX = cam3D.focusX + cam3D.dist * cosP * cosY;
+      const eyeY = cam3D.focusY + cam3D.dist * cosP * sinY;
+      const eyeZ = cam3D.focusZ - cam3D.dist * sinP;
+
+      let fx = cam3D.focusX - eyeX, fy = cam3D.focusY - eyeY, fz = cam3D.focusZ - eyeZ;
+      const fLen = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1e-4;
+      fx /= fLen; fy /= fLen; fz /= fLen;
+
+      let rx = -fy, ry = fx, rz = 0;
+      const rLen = Math.sqrt(rx * rx + ry * ry) || 1e-4;
+      rx /= rLen; ry /= rLen;
+
+      const ux = ry * fz, uy = -rx * fz, uz = rx * fy - ry * fx;
+
+      const vx = px - eyeX, vy = py - eyeY, vz = pz - eyeZ;
+      const xc = vx * rx + vy * ry + vz * rz;
+      const yc = vx * ux + vy * uy + vz * uz;
+      const zc = vx * fx + vy * fy + vz * fz;
+
+      if (zc <= 1.0) return null;
+      const fScale = (W * 0.5) / Math.tan(55 * Math.PI / 360);
+      return { x: (W * 0.5) + (xc / zc) * fScale, y: (H * 0.5) - (yc / zc) * fScale, z: zc };
+    }
+
+    function render3DLoop() {
+      if (!canvas3D || !ctx3D || currentViewMode === 'cam') {
+        requestAnimationFrame(render3DLoop);
+        return;
+      }
+
+      const rect = canvas3D.getBoundingClientRect();
+      const W = rect.width, H = rect.height;
+      if (W === 0 || H === 0) {
+        requestAnimationFrame(render3DLoop);
+        return;
+      }
+
+      ctx3D.clearRect(0, 0, W, H);
+
+      if (cam3D.mode === 'chase') {
+        cam3D.focusX = drone3D.x; cam3D.focusY = drone3D.y; cam3D.focusZ = drone3D.z;
+        cam3D.yaw = drone3D.yaw + Math.PI;
+      }
+
+      const drawList = [];
+
+      // Ground grid
+      for (let x = -10; x <= 160; x += 15) {
+        const p1 = projectPoint(x, -45, 0, W, H);
+        const p2 = projectPoint(x, 25, 0, W, H);
+        if (p1 && p2) {
+          drawList.push({
+            depth: (p1.z + p2.z) * 0.5 + 40,
+            draw: () => {
+              ctx3D.beginPath(); ctx3D.moveTo(p1.x, p1.y); ctx3D.lineTo(p2.x, p2.y);
+              ctx3D.strokeStyle = (x % 45 === 0) ? 'rgba(0, 240, 255, 0.25)' : 'rgba(255, 255, 255, 0.05)';
+              ctx3D.lineWidth = (x % 45 === 0) ? 1.5 : 0.8; ctx3D.stroke();
+            }
+          });
+        }
+      }
+
+      for (let y = -45; y <= 25; y += 15) {
+        const p1 = projectPoint(-10, y, 0, W, H);
+        const p2 = projectPoint(160, y, 0, W, H);
+        if (p1 && p2) {
+          drawList.push({
+            depth: (p1.z + p2.z) * 0.5 + 40,
+            draw: () => {
+              ctx3D.beginPath(); ctx3D.moveTo(p1.x, p1.y); ctx3D.lineTo(p2.x, p2.y);
+              ctx3D.strokeStyle = (y === 0) ? 'rgba(0, 255, 157, 0.25)' : 'rgba(255, 255, 255, 0.05)';
+              ctx3D.lineWidth = (y === 0) ? 1.5 : 0.8; ctx3D.stroke();
+            }
+          });
+        }
+      }
+
+      // Buildings
+      LANDMARKS_3D.forEach(lm => {
+        if (lm.type === 'building') {
+          const hw = lm.w * 0.5, hd = lm.d * 0.5, topZ = -lm.h;
+          const v = [
+            projectPoint(lm.x - hw, lm.y - hd, 0, W, H),
+            projectPoint(lm.x + hw, lm.y - hd, 0, W, H),
+            projectPoint(lm.x + hw, lm.y + hd, 0, W, H),
+            projectPoint(lm.x - hw, lm.y + hd, 0, W, H),
+            projectPoint(lm.x - hw, lm.y - hd, topZ, W, H),
+            projectPoint(lm.x + hw, lm.y - hd, topZ, W, H),
+            projectPoint(lm.x + hw, lm.y + hd, topZ, W, H),
+            projectPoint(lm.x - hw, lm.y + hd, topZ, W, H)
+          ];
+          if (v.every(p => p !== null)) {
+            const faces = [
+              { idx: [0, 1, 5, 4], shade: 0.75 },
+              { idx: [1, 2, 6, 5], shade: 0.90 },
+              { idx: [2, 3, 7, 6], shade: 0.65 },
+              { idx: [3, 0, 4, 7], shade: 0.80 },
+              { idx: [4, 5, 6, 7], shade: 1.05, isRoof: true }
+            ];
+            faces.forEach(f => {
+              const pts = f.idx.map(i => v[i]);
+              const avgZ = pts.reduce((sum, p) => sum + p.z, 0) / pts.length;
+              drawList.push({
+                depth: avgZ,
+                draw: () => {
+                  ctx3D.beginPath(); ctx3D.moveTo(pts[0].x, pts[0].y);
+                  for (let i = 1; i < pts.length; i++) ctx3D.lineTo(pts[i].x, pts[i].y);
+                  ctx3D.closePath();
+                  ctx3D.fillStyle = f.isRoof ? lm.roofColor : lm.color;
+                  ctx3D.fill();
+                  ctx3D.strokeStyle = 'rgba(255, 255, 255, 0.25)'; ctx3D.lineWidth = 1; ctx3D.stroke();
+
+                  if (f.isRoof && lm.isHospital) {
+                    const rc = projectPoint(lm.x, lm.y, topZ - 0.1, W, H);
+                    if (rc) {
+                      ctx3D.fillStyle = '#ef4444';
+                      ctx3D.fillRect(rc.x - 7, rc.y - 2, 14, 4);
+                      ctx3D.fillRect(rc.x - 2, rc.y - 7, 4, 14);
+                    }
+                  }
+                }
+              });
+            });
+
+            const lbl = projectPoint(lm.x, lm.y, topZ - 3.5, W, H);
+            if (lbl) {
+              drawList.push({
+                depth: lbl.z - 5.0,
+                draw: () => {
+                  ctx3D.font = '10px ui-monospace, monospace';
+                  const txt = `${lm.name} [H:${lm.h}m]`;
+                  const tw = ctx3D.measureText(txt).width;
+                  ctx3D.fillStyle = 'rgba(10, 15, 29, 0.85)';
+                  ctx3D.fillRect(lbl.x - tw * 0.5 - 4, lbl.y - 12, tw + 8, 15);
+                  ctx3D.strokeStyle = lm.color; ctx3D.lineWidth = 1;
+                  ctx3D.strokeRect(lbl.x - tw * 0.5 - 4, lbl.y - 12, tw + 8, 15);
+                  ctx3D.fillStyle = lm.labelColor;
+                  ctx3D.fillText(txt, lbl.x - tw * 0.5, lbl.y);
+                }
+              });
+            }
+          }
+        } else if (lm.type === 'fountain') {
+          const fc = projectPoint(lm.x, lm.y, 0, W, H);
+          const ft = projectPoint(lm.x, lm.y, -lm.height, W, H);
+          if (fc && ft) {
+            drawList.push({
+              depth: fc.z,
+              draw: () => {
+                ctx3D.beginPath(); ctx3D.arc(fc.x, fc.y, 14, 0, Math.PI * 2);
+                ctx3D.fillStyle = '#1e293b'; ctx3D.fill(); ctx3D.strokeStyle = '#00f0ff'; ctx3D.stroke();
+                ctx3D.beginPath(); ctx3D.arc(fc.x, fc.y, 10, 0, Math.PI * 2);
+                ctx3D.fillStyle = 'rgba(0, 212, 255, 0.65)'; ctx3D.fill();
+                ctx3D.font = '10px ui-monospace, monospace';
+                const txt = 'Fountain Plaza';
+                ctx3D.fillStyle = '#67e8f9';
+                ctx3D.fillText(txt, ft.x - 30, ft.y - 6);
+              }
+            });
+          }
+        }
+      });
+
+      // Drone Flight Trail
+      if (drone3D.history.length > 1) {
+        for (let i = 0; i < drone3D.history.length - 1; i++) {
+          const p1 = projectPoint(drone3D.history[i].x, drone3D.history[i].y, drone3D.history[i].z, W, H);
+          const p2 = projectPoint(drone3D.history[i + 1].x, drone3D.history[i + 1].y, drone3D.history[i + 1].z, W, H);
+          if (p1 && p2) {
+            drawList.push({
+              depth: (p1.z + p2.z) * 0.5 + 2.0,
+              draw: () => {
+                ctx3D.beginPath(); ctx3D.moveTo(p1.x, p1.y); ctx3D.lineTo(p2.x, p2.y);
+                ctx3D.strokeStyle = 'rgba(0, 255, 157, 0.6)'; ctx3D.lineWidth = 2.0; ctx3D.stroke();
+              }
+            });
+          }
+        }
+      }
+
+      // Glowing 3D Orbit Continuous Trajectory Ring
+      if (drone3D.isOrbiting && drone3D.orbitCenter && drone3D.orbitRadius) {
+        const ox = drone3D.orbitCenter[0];
+        const oy = drone3D.orbitCenter[1];
+        const oz = drone3D.orbitCenter[2] || drone3D.z || -10.0;
+        const R = drone3D.orbitRadius;
+        const segs = 64;
+        const orbitPts = [];
+
+        for (let i = 0; i <= segs; i++) {
+          const a = (i / segs) * Math.PI * 2;
+          const px = ox + R * Math.cos(a);
+          const py = oy + R * Math.sin(a);
+          const p = projectPoint(px, py, oz, W, H);
+          if (p) orbitPts.push(p);
+        }
+
+        if (orbitPts.length > 2) {
+          const avgZ = orbitPts.reduce((s, p) => s + p.z, 0) / orbitPts.length;
+          drawList.push({
+            depth: avgZ + 1.0,
+            draw: () => {
+              // Glowing outer halo
+              ctx3D.beginPath();
+              ctx3D.moveTo(orbitPts[0].x, orbitPts[0].y);
+              for (let i = 1; i < orbitPts.length; i++) ctx3D.lineTo(orbitPts[i].x, orbitPts[i].y);
+              ctx3D.closePath();
+              ctx3D.strokeStyle = 'rgba(0, 240, 255, 0.3)';
+              ctx3D.lineWidth = 6;
+              ctx3D.stroke();
+
+              // Bright inner trajectory line
+              ctx3D.beginPath();
+              ctx3D.moveTo(orbitPts[0].x, orbitPts[0].y);
+              for (let i = 1; i < orbitPts.length; i++) ctx3D.lineTo(orbitPts[i].x, orbitPts[i].y);
+              ctx3D.closePath();
+              ctx3D.strokeStyle = 'rgba(0, 255, 200, 0.95)';
+              ctx3D.lineWidth = 2.0;
+              ctx3D.stroke();
+
+              // Center vertical dashed anchor axis
+              const oc = projectPoint(ox, oy, 0, W, H);
+              const oct = projectPoint(ox, oy, oz - 2.0, W, H);
+              if (oc && oct) {
+                ctx3D.beginPath();
+                ctx3D.setLineDash([4, 4]);
+                ctx3D.moveTo(oc.x, oc.y);
+                ctx3D.lineTo(oct.x, oct.y);
+                ctx3D.strokeStyle = 'rgba(0, 240, 255, 0.4)';
+                ctx3D.lineWidth = 1;
+                ctx3D.stroke();
+                ctx3D.setLineDash([]);
+              }
+
+              // 3D Perspective Badge on Orbit Ring
+              const tagPt = orbitPts[0];
+              if (tagPt) {
+                ctx3D.font = 'bold 9px ui-monospace, monospace';
+                const tagTxt = `ORBIT: ${drone3D.orbitTarget || 'TARGET'} [R:${R.toFixed(1)}m]`;
+                const tw = ctx3D.measureText(tagTxt).width;
+                ctx3D.fillStyle = 'rgba(10, 15, 29, 0.85)';
+                ctx3D.fillRect(tagPt.x - tw * 0.5 - 4, tagPt.y - 14, tw + 8, 14);
+                ctx3D.strokeStyle = '#00f0ff';
+                ctx3D.lineWidth = 1;
+                ctx3D.strokeRect(tagPt.x - tw * 0.5 - 4, tagPt.y - 14, tw + 8, 14);
+                ctx3D.fillStyle = '#00f0ff';
+                ctx3D.fillText(tagTxt, tagPt.x - tw * 0.5, tagPt.y - 3);
+              }
+            }
+          });
+        }
+      }
+
+      // Drone model
+      const dp = projectPoint(drone3D.x, drone3D.y, drone3D.z, W, H);
+      const dg = projectPoint(drone3D.x, drone3D.y, 0, W, H);
+      if (dp && dg) {
+        drawList.push({
+          depth: dp.z,
+          draw: () => {
+            // Altitude shadow
+            ctx3D.beginPath(); ctx3D.moveTo(dg.x, dg.y); ctx3D.lineTo(dp.x, dp.y);
+            ctx3D.strokeStyle = 'rgba(0, 240, 255, 0.4)'; ctx3D.lineWidth = 1.5; ctx3D.stroke();
+            ctx3D.beginPath(); ctx3D.ellipse(dg.x, dg.y, 7, 3.5, 0, 0, Math.PI * 2);
+            ctx3D.fillStyle = 'rgba(0,0,0,0.5)'; ctx3D.fill();
+
+            // Rotors
+            rotorAngle3D += 0.4;
+            const armLen = 2.2;
+            [-0.25, 0.25, 0.75, 1.25].forEach(ang => {
+              const mx = drone3D.x + Math.cos(drone3D.yaw + ang * Math.PI) * armLen;
+              const my = drone3D.y + Math.sin(drone3D.yaw + ang * Math.PI) * armLen;
+              const mp = projectPoint(mx, my, drone3D.z, W, H);
+              if (mp) {
+                ctx3D.beginPath(); ctx3D.moveTo(dp.x, dp.y); ctx3D.lineTo(mp.x, mp.y);
+                ctx3D.strokeStyle = '#475569'; ctx3D.lineWidth = 2.5; ctx3D.stroke();
+                ctx3D.beginPath(); ctx3D.ellipse(mp.x, mp.y, 5, 2, drone3D.yaw, 0, Math.PI * 2);
+                ctx3D.fillStyle = 'rgba(0, 240, 255, 0.35)'; ctx3D.fill();
+              }
+            });
+
+            // Center body
+            ctx3D.beginPath(); ctx3D.arc(dp.x, dp.y, 5, 0, Math.PI * 2);
+            ctx3D.fillStyle = '#0f172a'; ctx3D.fill();
+            ctx3D.strokeStyle = '#00f0ff'; ctx3D.lineWidth = 2.0; ctx3D.stroke();
+
+            // Heading pointer
+            const np = projectPoint(drone3D.x + Math.cos(drone3D.yaw) * 3.5, drone3D.y + Math.sin(drone3D.yaw) * 3.5, drone3D.z, W, H);
+            if (np) {
+              ctx3D.beginPath(); ctx3D.moveTo(dp.x, dp.y); ctx3D.lineTo(np.x, np.y);
+              ctx3D.strokeStyle = '#ff3366'; ctx3D.lineWidth = 2.0; ctx3D.stroke();
+            }
+
+            ctx3D.font = 'bold 9px ui-monospace, monospace';
+            ctx3D.fillStyle = '#00ff9d';
+            ctx3D.fillText(`DRONE [${drone3D.x.toFixed(1)}, ${drone3D.y.toFixed(1)}]`, dp.x + 10, dp.y - 6);
+          }
+        });
+      }
+
+      drawList.sort((a, b) => b.depth - a.depth);
+      drawList.forEach(item => item.draw());
+
+      requestAnimationFrame(render3DLoop);
+    }
+
+    function init3DEngine() {
+      canvas3D = document.getElementById("dashboard-canvas3d");
+      if (!canvas3D) return;
+      ctx3D = canvas3D.getContext("2d");
+      resize3DCanvas();
+      window.addEventListener("resize", resize3DCanvas);
+
+      canvas3D.addEventListener("mousedown", e => {
+        cam3D.isDragging = true;
+        cam3D.lastX = e.clientX; cam3D.lastY = e.clientY;
+        cam3D.isShift = e.shiftKey || (e.button === 2);
+      });
+      window.addEventListener("mouseup", () => { cam3D.isDragging = false; });
+      window.addEventListener("mousemove", e => {
+        if (!cam3D.isDragging) return;
+        const dx = e.clientX - cam3D.lastX;
+        const dy = e.clientY - cam3D.lastY;
+        cam3D.lastX = e.clientX; cam3D.lastY = e.clientY;
+        if (cam3D.isShift) {
+          cam3D.focusX -= (dy * Math.cos(cam3D.yaw) - dx * Math.sin(cam3D.yaw)) * 0.18;
+          cam3D.focusY -= (dy * Math.sin(cam3D.yaw) + dx * Math.cos(cam3D.yaw)) * 0.18;
+        } else {
+          cam3D.yaw -= dx * 0.008;
+          cam3D.pitch = Math.max(0.08, Math.min(1.52, cam3D.pitch + dy * 0.008));
+        }
+        if (cam3D.mode === 'chase') cam3D.mode = 'orbit';
+      });
+      canvas3D.addEventListener("wheel", e => {
+        e.preventDefault();
+        cam3D.dist = Math.max(15.0, Math.min(300.0, cam3D.dist * (e.deltaY > 0 ? 1.08 : 0.92)));
+      }, { passive: false });
+      canvas3D.addEventListener("contextmenu", e => e.preventDefault());
+
+      requestAnimationFrame(render3DLoop);
+    }
+
     // Start streaming on page load
-    window.addEventListener("DOMContentLoaded", setupSSE);
+    window.addEventListener("DOMContentLoaded", () => {
+      setupSSE();
+      init3DEngine();
+    });
   </script>
 </body>
 </html>

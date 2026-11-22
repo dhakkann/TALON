@@ -5,7 +5,7 @@
 [![Platform: AirSim / Windows / Linux](https://img.shields.io/badge/Platform-AirSim%20%7C%20Windows%20%7C%20Linux-orange.svg)]()
 
 > **AR511 Autonomous Mobile Robotics Course Project**  
-> **Developers**: Dharmesh Sahu & Mihir Yadav  
+> **Developers**: Dharmesh Sahu (B24033, SBB) & Mihir Yadav (B24341, SCEE)  
 
 **TALON** is a continuous-flight, real-time autonomous drone navigation system operating in 3D urban environments (AirSim / Unreal Engine). It transforms language-guided aerial navigation from static, turn-based discrete stepping into a **real-time 20–30 Hz continuous flight control loop** paired with **30+ FPS open-vocabulary visual perception** and **asynchronous LLM cognitive guidance**.
 
@@ -163,6 +163,6 @@ While the drone is airborne, interact via the dashboard chat box in real time:
 
 ## Authors & Acknowledgments
 
-- **Dharmesh Sahu** (B24033) - Department of Electrical Engineering & Computer Science
-- **Mihir Yadav** (B24341) - Department of Electrical Engineering & Computer Science
+- **Dharmesh Sahu** (B24033) - School of Biosciences and Bioengineering (SBB)
+- **Mihir Yadav** (B24341) - School of Computing and Electrical Engineering (SCEE)
 - Developed for **AR511 Autonomous Mobile Robot**, under faculty guidance.

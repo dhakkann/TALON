@@ -355,7 +355,7 @@ gantt
 
 ## Work Division (Dharmesh Sahu & Mihir Yadav)
 
-| Component | Dharmesh Sahu (Lead) | Mihir Yadav (Co-Developer) |
+| Component | Dharmesh Sahu (B24033, SBB) | Mihir Yadav (B24341, SCEE) |
 |---|---|---|
 | **Simulation & Flight Control** | 20 Hz velocity tracker, guidance algorithms | AirSim setup, environment testing, safety boundaries |
 | **Real-Time Vision** | Vectorized 3D projection, depth centroid filtering | YOLO-World installation, test prompts & weights |

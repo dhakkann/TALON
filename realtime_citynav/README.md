@@ -1,8 +1,7 @@
 # Real-Time Autonomous City Navigation (`realtime_citynav`)
 
 **AR511 Autonomous Mobile Robotics Course Project**  
-*Lead Developer*: Dharmesh Sahu  
-*Co-Developer*: Mihir Yadav  
+*Developers*: Dharmesh Sahu (B24033, SBB) & Mihir Yadav (B24341, SCEE)  
 
 A continuous-flight, real-time autonomous drone navigation system in AirSim 3D city environments featuring:
 - **Continuous 20–30 Hz Flight Controller**: Native `moveByVelocityAsync` smooth velocity vectors with proportional waypoint guidance and reactive depth-based Artificial Potential Field (APF) obstacle avoidance.
@@ -44,12 +43,22 @@ realtime_citynav/
 ## Quickstart
 
 ### 1. Run Automated Test Suite
-To execute all 32 unit and integration tests:
+To execute all 61 unit, integration, and scenario tests:
 ```bash
-python -m unittest discover -s realtime_citynav/tests -p "test_*.py"
+pytest realtime_citynav/tests
 ```
 
-### 2. Launch Standalone Flight Operations (with Web Dashboard)
+### 2. Run Automated Scenario Evaluator Suite
+To programmatically run the 11 validation and stress scenarios (testing 3D spatial prepositions, compound directions, elevated landmark altitudes, continuous memory maintenance, deduplication, mid-flight interruptions, APF obstacle avoidance, and extreme inputs):
+```bash
+python -m realtime_citynav.scenario_evaluator
+```
+Or run in interactive diagnostic shell mode to give tasks, inject landmarks, send mid-flight interruptions, step flight, and inspect live memory tables:
+```bash
+python -m realtime_citynav.scenario_evaluator --interactive
+```
+
+### 3. Launch Standalone Flight Operations (with Web Dashboard)
 To run the full system in simulation mode (works with or without AirSim):
 ```bash
 python -m realtime_citynav.main --speed 4.0 --port 5000 --instruction "Fly to the fountain, then pass the red building, and navigate to the tower"

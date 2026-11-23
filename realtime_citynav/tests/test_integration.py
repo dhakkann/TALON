@@ -119,6 +119,30 @@ class TestEndToEndIntegration(unittest.TestCase):
         self.assertAlmostEqual(state["cmd_velocity"][0], 0.0, places=2)
         self.assertAlmostEqual(state["cmd_velocity"][1], 0.0, places=2)
 
+    def test_multi_subgoal_interruption_resets_active_plan(self):
+        """Multi-subgoal interruption re-plans active_plan avoiding stale target desynchronization."""
+        # Start initial single mission to tower
+        self.orchestrator.start_mission("Fly to tower")
+        time.sleep(0.2)
+        tower_target = self.orchestrator.flight.target_position
+
+        # Send multi-subgoal interruption
+        self.orchestrator.queue_command("Fly to fountain then circle blue building 2 times then head to red building")
+        time.sleep(0.5)
+
+        with self.orchestrator._state_lock:
+            self.assertEqual(self.orchestrator.active_target_name, "fountain")
+            self.assertFalse(np.allclose(self.orchestrator.flight.target_position, tower_target))
+
+    def test_sequential_subgoal_orbit_to_navigate_mode(self):
+        """Transition from orbit subgoal to sequential navigation sets flight_mode to NAVIGATING."""
+        self.orchestrator.active_plan = None
+        self.orchestrator.subgoals = ["circle around blue building 2 times", "red building"]
+        self.orchestrator._set_current_subgoal_target(0)
+        self.assertEqual(self.orchestrator.flight_mode, "ORBIT")
+        self.orchestrator._set_current_subgoal_target(1)
+        self.assertEqual(self.orchestrator.flight_mode, "NAVIGATING")
+
 
 if __name__ == "__main__":
     unittest.main()

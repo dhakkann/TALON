@@ -213,6 +213,7 @@ class RealtimeFlightController:
             self.orbit_radius = max(2.0, float(radius))
             self.orbit_altitude = max(1.0, float(altitude))
             self.orbit_speed = min(self.max_speed, max(0.5, float(speed)))
+            self.cruise_speed = self.orbit_speed
             self.orbit_facing = "TANGENT" if facing.upper() in ("TANGENT", "FORWARD", "AHEAD") else "INWARD"
             self.orbit_revolutions = float(revolutions) if (revolutions is not None and float(revolutions) > 0) else None
             self.orbit_direction = -1 if direction.upper() in ("CW", "CLOCKWISE") else 1

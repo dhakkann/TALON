@@ -379,7 +379,7 @@ class CityNavOrchestrator:
                         radius = float(orbit_info.get("radius") or 16.0)
                         alt = float(orbit_info.get("altitude") or 10.0)
                         spd = float(orbit_info.get("speed") or self.flight.cruise_speed)
-                        facing = orbit_info.get("facing", "INWARD")
+                        facing = orbit_info.get("facing") or leg.get("facing") or "INWARD"
                         revs = orbit_info.get("revolutions")
                         direction = orbit_info.get("direction", "CCW")
                         self.flight.set_orbit_target(
@@ -480,6 +480,7 @@ class CityNavOrchestrator:
                 approach_pos, obs_alt = self._compute_approach_target(self.active_target_name, target_pos)
                 self.flight.set_altitude(obs_alt)
                 self.flight.set_target(approach_pos)
+                self.flight_mode = "NAVIGATING"
                 self.narrator.notify_target_acquired(
                     self.active_target_name,
                     float(np.linalg.norm(approach_pos[:2] - np.array(self.flight.get_pose()[:2]))),
@@ -487,6 +488,7 @@ class CityNavOrchestrator:
                 )
             else:
                 # Seek target via open-vocabulary perception sweep
+                self.flight_mode = "NAVIGATING"
                 self.flight.set_target(None)
                 self.narrator.emit_event(
                     "TARGET_SEARCH",
@@ -627,16 +629,33 @@ class CityNavOrchestrator:
                     self.narrator.notify_interruption(intent, f"{reply} (Target: {target})")
 
                     with self._state_lock:
-                        if intent in ("MULTI_SUBGOAL_MISSION", "PATROL_ROUTE"):
+                        if intent in ("MULTI_SUBGOAL_MISSION", "PATROL_ROUTE") or (result.get("subgoals") and len(result.get("subgoals")) > 1):
+                            subgoals = result.get("subgoals")
                             instruction = result.get("instruction") or result.get("raw_message")
-                            if instruction:
+                            if subgoals and len(subgoals) > 1:
+                                if instruction and hasattr(self.dialogue, "plan_mission"):
+                                    try:
+                                        self.active_plan = self.dialogue.plan_mission(instruction)
+                                    except Exception:
+                                        self.active_plan = None
+                                else:
+                                    self.active_plan = None
+                                self.subgoals = list(subgoals)
+                                self.active_subgoal_index = 0
+                                self.mission_completed = False
+                                self.flight_mode = "NAVIGATING"
+                                self._set_current_subgoal_target(0)
+                                # Update vocabulary for all subgoals
+                                base_classes = [self.dialogue.extract_base_landmark(s).lower() for s in self.subgoals]
+                                extended_classes = list(dict.fromkeys(self.config.perception.default_classes + base_classes))
+                                self.perception.update_target_vocabulary(extended_classes)
+                                self.narrator.emit_event(
+                                    "SUBGOALS_PLANNED",
+                                    f"Operator interruption updated {len(self.subgoals)} subgoals: {' -> '.join(self.subgoals)}",
+                                    {"subgoals": self.subgoals}
+                                )
+                            elif instruction:
                                 self.start_mission(instruction)
-                            elif result.get("subgoals"):
-                                with self._state_lock:
-                                    self.subgoals = result["subgoals"]
-                                    self.active_subgoal_index = 0
-                                    self.flight_mode = "NAVIGATING"
-                                    self._set_current_subgoal_target(0)
                             continue
 
                         # Ensure vehicle is airborne if operator sends a flight maneuver while grounded
@@ -1057,6 +1076,9 @@ class CityNavOrchestrator:
 
 def main():
     parser = argparse.ArgumentParser(description="Real-Time Autonomous CityNav Drone System")
+    parser.add_argument("--airsim-ip", "--ip", dest="airsim_ip", type=str, default="", help="AirSim host IP address")
+    parser.add_argument("--airsim-port", dest="airsim_port", type=int, default=0, help="AirSim RPC port")
+    parser.add_argument("--vehicle-name", dest="vehicle_name", type=str, default="", help="AirSim vehicle name")
     parser.add_argument("--mock", action="store_true", help="Force kinematic simulation mock mode")
     parser.add_argument("--speed", type=float, default=4.0, help="Cruise speed in m/s")
     parser.add_argument("--port", type=int, default=5000, help="Dashboard web port")
@@ -1065,6 +1087,12 @@ def main():
     args = parser.parse_args()
 
     cfg = SystemConfig()
+    if args.airsim_ip:
+        cfg.airsim.ip = args.airsim_ip
+    if args.airsim_port:
+        cfg.airsim.port = args.airsim_port
+    if args.vehicle_name:
+        cfg.airsim.vehicle_name = args.vehicle_name
     cfg.flight.cruise_speed = args.speed
     cfg.dashboard.port = args.port
     if args.api_key:

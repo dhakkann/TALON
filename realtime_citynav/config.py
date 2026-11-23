@@ -5,12 +5,27 @@ from dataclasses import dataclass, field
 from typing import List
 
 
+def _get_default_airsim_ip() -> str:
+    return os.getenv("AIRSIM_IP", "127.0.0.1")
+
+
+def _get_default_airsim_port() -> int:
+    try:
+        return int(os.getenv("AIRSIM_PORT", "41451"))
+    except (ValueError, TypeError):
+        return 41451
+
+
+def _get_default_airsim_vehicle_name() -> str:
+    return os.getenv("AIRSIM_VEHICLE_NAME", "")
+
+
 @dataclass
 class AirSimConfig:
     """AirSim connection and camera setup."""
-    ip: str = "127.0.0.1"
-    port: int = 41451
-    vehicle_name: str = ""
+    ip: str = field(default_factory=_get_default_airsim_ip)
+    port: int = field(default_factory=_get_default_airsim_port)
+    vehicle_name: str = field(default_factory=_get_default_airsim_vehicle_name)
     camera_name: str = "front_center"
     fov_degrees: float = 90.0
     image_width: int = 640

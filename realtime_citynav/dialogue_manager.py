@@ -321,6 +321,12 @@ class DialogueManager:
                             for k, v in orb.items():
                                 if leg["orbit"].get(k) is None:
                                     leg["orbit"][k] = v
+                                elif k == "facing" and v == "TANGENT":
+                                    leg["orbit"][k] = "TANGENT"
+                                elif k == "direction" and v == "CW":
+                                    leg["orbit"][k] = "CW"
+                                elif k == "revolutions" and v is not None:
+                                    leg["orbit"][k] = v
 
         for leg in legs:
             base_lm = leg.get("base_landmark") or self.extract_base_landmark(leg.get("target", ""))
@@ -539,7 +545,7 @@ class DialogueManager:
                             data["altitude"] = h_orbit["altitude"]
                         if not data.get("speed") and h_orbit.get("speed") != 3.0:
                             data["speed"] = h_orbit["speed"]
-                        if not data.get("facing"):
+                        if not data.get("facing") or h_orbit.get("facing") == "TANGENT":
                             data["facing"] = h_orbit["facing"]
                         if "revolutions" not in data or data["revolutions"] is None:
                             data["revolutions"] = h_orbit["revolutions"]

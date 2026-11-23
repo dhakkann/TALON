@@ -65,6 +65,23 @@ class RealtimePerception:
         # Load YOLO-World model
         self.model = None
         self.current_classes: List[str] = []
+        self.mock_world: Dict[str, np.ndarray] = {
+            "fountain": np.array([32.0, 0.0, 0.0]),
+            "red building": np.array([75.0, 12.0, 0.0]),
+            "blue building": np.array([75.0, -14.0, 0.0]),
+            "tower": np.array([130.0, -10.0, 0.0]),
+            "hospital": np.array([60.0, -30.0, 0.0]),
+            "warehouse": np.array([100.0, 40.0, 0.0]),
+            "dock": np.array([120.0, 50.0, 0.0]),
+            "solar farm": np.array([45.0, -50.0, 0.0]),
+            "solar panels": np.array([45.0, -50.0, 0.0]),
+            "helipad": np.array([20.0, 30.0, 0.0]),
+            "bridge": np.array([85.0, -25.0, 0.0]),
+            "crane": np.array([110.0, 20.0, 0.0]),
+            "stadium": np.array([150.0, 30.0, 0.0]),
+            "hangar": np.array([90.0, 60.0, 0.0]),
+            "library": np.array([50.0, 25.0, 0.0]),
+        }
         if not self.mock and _YOLO_AVAILABLE:
             if device is None:
                 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -86,6 +103,10 @@ class RealtimePerception:
                 self.mock = True
         else:
             self.mock = True
+
+    def register_mock_landmark(self, name: str, pos: np.ndarray) -> None:
+        """Dynamically register a novel simulated landmark position."""
+        self.mock_world[name.lower().strip()] = np.asarray(pos, dtype=float)
 
     def update_target_vocabulary(self, class_names: List[str]) -> bool:
         """Dynamically update zero-shot detection vocabulary at runtime."""
@@ -214,13 +235,7 @@ class RealtimePerception:
             t_proj0 = time.perf_counter()
 
             # Dynamic mock world landmark tracking
-            mock_world = {
-                "fountain": np.array([32.0, 0.0, 0.0]),
-                "red building": np.array([75.0, 12.0, 0.0]),
-                "blue building": np.array([75.0, -14.0, 0.0]),
-                "tower": np.array([130.0, -10.0, 0.0]),
-                "hospital": np.array([60.0, -30.0, 0.0]),
-            }
+            mock_world = self.mock_world
 
             drone_x, drone_y, drone_z, drone_yaw = drone_pose[:4] if len(drone_pose) >= 4 else (0.0, 0.0, -5.0, 0.0)
             cos_y, sin_y = np.cos(drone_yaw), np.sin(drone_yaw)

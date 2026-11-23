@@ -37,12 +37,22 @@ class DialogueManager:
         "blue building": np.array([75.0, -14.0, 0.0]),
         "tower": np.array([130.0, -10.0, 0.0]),
         "hospital": np.array([60.0, -30.0, 0.0]),
+        "warehouse": np.array([100.0, 40.0, 0.0]),
+        "dock": np.array([120.0, 50.0, 0.0]),
+        "solar farm": np.array([45.0, -50.0, 0.0]),
+        "solar panels": np.array([45.0, -50.0, 0.0]),
+        "helipad": np.array([20.0, 30.0, 0.0]),
+        "bridge": np.array([85.0, -25.0, 0.0]),
+        "crane": np.array([110.0, 20.0, 0.0]),
+        "stadium": np.array([150.0, 30.0, 0.0]),
+        "hangar": np.array([90.0, 60.0, 0.0]),
+        "library": np.array([50.0, 25.0, 0.0]),
     }
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-3.5-flash-lite",
+        model_name: str = "gemini-3.5-flash",
         mock: bool = False
     ):
         self.mock = mock
@@ -54,6 +64,9 @@ class DialogueManager:
         self.model_name = model_name
         self.command_queue: queue.Queue[str] = queue.Queue()
         self.client = None
+        self.known_landmarks: List[str] = list(self.KNOWN_DEFAULT_LANDMARKS)
+        self.landmark_centers: Dict[str, np.ndarray] = dict(self.KNOWN_LANDMARK_CENTERS)
+        self.last_planned_mission: Optional[Dict[str, Any]] = None
 
         if not self.mock and _GENAI_AVAILABLE and self.api_key:
             try:
@@ -62,9 +75,22 @@ class DialogueManager:
                 print(f"[DialogueManager] Could not initialize Gemini client: {e}. Falling back to heuristic mode.")
                 self.client = None
 
+    def register_known_landmark(self, name: str, center: Optional[np.ndarray] = None) -> None:
+        """Dynamically register a novel landmark into the dialogue manager's knowledge base."""
+        clean = self.clean_landmark_name(name).lower()
+        if clean and clean not in [lm.lower() for lm in self.known_landmarks]:
+            self.known_landmarks.append(clean)
+        if center is not None:
+            self.landmark_centers[clean] = np.asarray(center, dtype=float)
+
+    def update_known_landmarks(self, names: List[str]) -> None:
+        """Batch update the list of recognized landmarks."""
+        for n in names:
+            self.register_known_landmark(n)
+
     def _generate_with_gemini(self, prompt: str, response_mime_type: str = "application/json") -> str:
         """Call Gemini model with automatic resilient fallback across supported flash models."""
-        candidates = [self.model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash"]
+        candidates = [self.model_name, "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
         seen = set()
         models_to_try = [m for m in candidates if not (m in seen or seen.add(m))]
 
@@ -86,7 +112,10 @@ class DialogueManager:
             except Exception as e:
                 last_err = e
                 err_str = str(e).lower()
-                if "not_found" in err_str or "404" in err_str or "no longer available" in err_str or "not supported" in err_str:
+                if any(w in err_str for w in [
+                    "not_found", "404", "no longer available", "not supported",
+                    "503", "unavailable", "high demand", "resource_exhausted", "429", "rate"
+                ]):
                     continue
                 raise e
         if last_err:
@@ -102,6 +131,229 @@ class DialogueManager:
         """Check if any operator commands are waiting in queue."""
         return not self.command_queue.empty()
 
+    def plan_mission(
+        self,
+        instruction: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Intelligently plan and decompose flight instruction using Gemini LLM.
+        
+        Extracts multi-leg routes, continuous orbits, geometric/patrol patterns,
+        spatial offsets, altitude clearances, and arbitrary landmarks into a structured plan.
+        """
+        if not instruction or not instruction.strip():
+            return {"mission_type": "IDLE", "rationale": "Empty instruction", "subgoals": [], "legs": []}
+
+        if self.mock or self.client is None:
+            heuristic_subgoals = self._heuristic_parse_instruction(instruction)
+            legs = []
+            for i, s in enumerate(heuristic_subgoals):
+                if self.is_orbit_command(s):
+                    orb = self.parse_orbit_command(s)
+                    legs.append({
+                        "index": i,
+                        "action": "ORBIT",
+                        "target": orb["target"] if orb else s,
+                        "base_landmark": orb["base_landmark"] if orb else self.extract_base_landmark(s),
+                        "subgoal_str": s,
+                        "orbit": orb or {}
+                    })
+                elif self.is_explicit_waypoint_path(s):
+                    wp_match = re.findall(r'\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]', s)
+                    wps = [[float(x), float(y), float(z)] for x, y, z in wp_match] if wp_match else []
+                    legs.append({
+                        "index": i,
+                        "action": "CURVE",
+                        "target": "waypoint_curve",
+                        "subgoal_str": s,
+                        "waypoints": wps
+                    })
+                elif self.is_hover_stop_command(s):
+                    legs.append({
+                        "index": i,
+                        "action": "HOVER",
+                        "target": None,
+                        "subgoal_str": s
+                    })
+                else:
+                    sp = self.parse_spatial_relation(s)
+                    legs.append({
+                        "index": i,
+                        "action": "NAVIGATE",
+                        "target": s,
+                        "base_landmark": sp.get("base_landmark") or self.extract_base_landmark(s),
+                        "subgoal_str": s,
+                        "spatial": sp,
+                        "altitude": sp.get("altitude_offset")
+                    })
+            return {
+                "mission_type": "HEURISTIC",
+                "rationale": "Heuristic fallback decomposition",
+                "subgoals": heuristic_subgoals,
+                "legs": legs,
+                "raw_instruction": instruction
+            }
+
+        known_str = ", ".join(self.known_landmarks)
+        prompt = (
+            "You are the master flight planner and cognitive mission decomposition AI for an autonomous urban drone.\n"
+            "Analyze the operator's flight instruction and break it down into an ordered sequence of flight subgoals and kinematically rich legs.\n"
+            "Coordinates convention: 3D NED frame (North=+X meters, East=+Y meters, Down=+Z meters; altitude h means Z = -h).\n\n"
+            f"Known Environment Landmarks: {known_str}.\n"
+            "NOTE: The environment can contain ANY physical landmark or structure (e.g. fountain, red building, blue building, tower, hospital, warehouse, solar panels, crane, helipad, stadium, bridge, library, hangar, dock, parking lot, etc.). Extract and preserve any arbitrary landmark mentioned.\n\n"
+            "Rules & Capabilities:\n"
+            "1. Multi-Leg Navigation: Decompose routes with transition words ('then', 'next', 'after that', 'followed by', 'from X to Y') into clean, ordered subgoals.\n"
+            "2. Spatial Relations & Clearances: ALWAYS preserve both vertical and horizontal offsets and prepositions in the subgoal text. Do NOT strip altitude or direction prepositions.\n"
+            "   - Vertical: '50m above fountain', '25m over tower', 'at 40m altitude'\n"
+            "   - Horizontal: '15m in front of tower', '10m behind hospital', '20m to the left of blue building', 'right of warehouse'\n"
+            "   - Compass: '15m north and 20m east of red building' (populate dx: +15.0, dy: +20.0)\n"
+            "   - Compound: '20m above and 15m behind red building', '10m to the left and 25m above tower'\n"
+            "3. Geometric Trajectories & Curves:\n"
+            "   - Continuous Orbits / Circling: (e.g. 'circle around blue building 3 times clockwise at 25m altitude facing forward at 5 m/s at 20m radius'). Action: 'ORBIT'.\n"
+            "   - Figure-8 Maneuver: (e.g. 'fly a figure 8 between red and blue building'). Action: 'FIGURE_8' or 'CURVE' with waypoints.\n"
+            "   - Spiral Climb / Descent: (e.g. 'spiral upwards around tower from 10m to 40m altitude'). Action: 'SPIRAL' or 'CURVE' with waypoints.\n"
+            "   - Search Grid / Lawnmower: (e.g. 'search area around stadium in a grid'). Action: 'SEARCH_GRID' or 'CURVE' with waypoints.\n"
+            "   - Explicit Waypoint Curves: If coordinate paths are provided (e.g. 'follow curve [[10, 20, -5], ...]'), Action: 'CURVE'.\n"
+            "4. Shorthand & Adjective Resolution: Resolve shorthand references (e.g. 'the red one' -> 'red building', 'blue' -> 'blue building', 'go from red to blue' -> 'red building' then 'blue building'). For novel landmarks, keep their clean name.\n"
+            "5. Collective Quantifiers: Phrases like 'visit all landmarks', 'go to every landmark', 'tour the city', 'explore each building' must expand into the full ordered list of all known environment landmarks: [\"fountain\", \"red building\", \"blue building\", \"tower\", \"hospital\"].\n"
+            "6. Patrol Patterns: Instructions commanding patrolling (e.g. 'patrol between warehouse and dock 3 times') should be decomposed into appropriate alternating transit legs.\n\n"
+            "Return ONLY a JSON object formatted as:\n"
+            "{\n"
+            "  \"mission_type\": \"MULTI_LEG\" | \"ORBIT\" | \"PATROL\" | \"SEARCH\" | \"WAYPOINT_PATH\" | \"FIGURE_8\" | \"SPIRAL\" | \"DIRECT_NAVIGATION\",\n"
+            "  \"rationale\": \"<concise explanation of flight plan>\",\n"
+            "  \"subgoals\": [\"<subgoal 1>\", \"<subgoal 2>\", ...],\n"
+            "  \"legs\": [\n"
+            "    {\n"
+            "      \"index\": 0,\n"
+            "      \"action\": \"NAVIGATE\" | \"ORBIT\" | \"HOVER\" | \"PATROL\" | \"SEARCH\" | \"CURVE\" | \"FIGURE_8\" | \"SPIRAL\",\n"
+            "      \"target\": \"<target name or spatial phrase>\",\n"
+            "      \"base_landmark\": \"<canonical landmark noun phrase>\",\n"
+            "      \"subgoal_str\": \"<string matching subgoals item>\",\n"
+            "      \"altitude\": <float or null>,\n"
+            "      \"speed\": <float, default 4.0>,\n"
+            "      \"facing\": \"INWARD\" | \"TANGENT\",\n"
+            "      \"spatial\": {\n"
+            "        \"relation\": \"ABOVE\" | \"IN_FRONT\" | \"BEHIND\" | \"LEFT\" | \"RIGHT\" | \"COMPASS\" | \"COMPOUND\" | \"DEFAULT\",\n"
+            "        \"distance\": <float or null>,\n"
+            "        \"altitude_offset\": <float or null>,\n"
+            "        \"horizontal_relation\": \"IN_FRONT\" | \"BEHIND\" | \"LEFT\" | \"RIGHT\" | \"COMPASS\" | null,\n"
+            "        \"horizontal_distance\": <float or null>,\n"
+            "        \"dx\": <float or null>,\n"
+            "        \"dy\": <float or null>\n"
+            "      },\n"
+            "      \"orbit\": {\n"
+            "        \"radius\": <float, default 16.0>,\n"
+            "        \"altitude\": <float, default 10.0>,\n"
+            "        \"speed\": <float, default 3.0>,\n"
+            "        \"facing\": \"INWARD\" | \"TANGENT\",\n"
+            "        \"revolutions\": <float or null>,\n"
+            "        \"direction\": \"CCW\" | \"CW\"\n"
+            "      },\n"
+            "      \"waypoints\": <[[x, y, z], ...] or null>\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            f"Instruction: \"{instruction}\""
+        )
+        raw_text = self._generate_with_gemini(prompt, response_mime_type="application/json")
+        data = json.loads(raw_text)
+        subgoals = data.get("subgoals", [])
+        if not isinstance(subgoals, list) or not subgoals:
+            raise ValueError("No valid subgoals in Gemini response")
+
+        resolved_subgoals = []
+        for s in subgoals:
+            s_str = str(s).strip()
+            if self.is_orbit_command(s_str):
+                # Preserve orbit command string without stripping orbit verb!
+                resolved_subgoals.append(s_str)
+            else:
+                res_s = self.resolve_landmark_shorthand(s_str, resolved_subgoals)
+                if res_s and (not resolved_subgoals or resolved_subgoals[-1] != res_s):
+                    resolved_subgoals.append(res_s)
+
+        # Safety safeguard: if single-leg raw instruction specifies an orbit command or spatial relation that was accidentally stripped by LLM, restore it
+        if len(resolved_subgoals) == 1 and self.is_orbit_command(instruction) and not self.is_orbit_command(resolved_subgoals[0]):
+            orbit_info = self.parse_orbit_command(instruction)
+            if orbit_info and orbit_info.get("target"):
+                rev_part = f" {int(orbit_info['revolutions'])} times" if orbit_info.get("revolutions") else ""
+                facing_part = " facing forward" if orbit_info.get("facing") == "TANGENT" else ""
+                speed_part = f" at {orbit_info['speed']} m/s" if (orbit_info.get("speed") and orbit_info["speed"] != 3.0) else ""
+                radius_part = f" at {orbit_info['radius']}m radius" if (orbit_info.get("radius") and orbit_info["radius"] != 16.0) else ""
+                altitude_part = f" at {orbit_info['altitude']}m altitude" if (orbit_info.get("altitude") and orbit_info["altitude"] != 10.0) else ""
+                direction_part = " clockwise" if orbit_info.get("direction") == "CW" else ""
+                resolved_subgoals = [f"circle around {orbit_info['target']}{rev_part}{facing_part}{speed_part}{radius_part}{altitude_part}{direction_part}".strip()]
+        elif len(resolved_subgoals) == 1:
+            spatial = self.parse_spatial_relation(instruction)
+            if spatial.get("relation") != "DEFAULT" and spatial.get("base_landmark"):
+                if spatial["base_landmark"].lower() == self.extract_base_landmark(resolved_subgoals[0]).lower():
+                    clean_inst = re.sub(r'^(?:hover|fly|go|climb|ascend|descend)\s+(?:at\s+|to\s+)?', '', instruction, flags=re.IGNORECASE).strip()
+                    resolved_subgoals = [self.resolve_landmark_shorthand(clean_inst)]
+
+        # Register all mentioned landmarks into known landmarks list
+        legs = data.get("legs", [])
+        if not legs:
+            legs = []
+            for i, s in enumerate(resolved_subgoals):
+                if self.is_orbit_command(s):
+                    orb = self.parse_orbit_command(s)
+                    legs.append({"index": i, "action": "ORBIT", "target": orb["target"] if orb else s, "base_landmark": orb["base_landmark"] if orb else self.extract_base_landmark(s), "subgoal_str": s, "orbit": orb or {}})
+                elif self.is_explicit_waypoint_path(s):
+                    wp_match = re.findall(r'\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]', s)
+                    wps = [[float(x), float(y), float(z)] for x, y, z in wp_match] if wp_match else []
+                    legs.append({"index": i, "action": "CURVE", "target": "waypoint_curve", "subgoal_str": s, "waypoints": wps})
+                elif self.is_hover_stop_command(s):
+                    legs.append({"index": i, "action": "HOVER", "target": None, "subgoal_str": s})
+                else:
+                    sp = self.parse_spatial_relation(s)
+                    legs.append({"index": i, "action": "NAVIGATE", "target": s, "base_landmark": sp.get("base_landmark") or self.extract_base_landmark(s), "subgoal_str": s, "spatial": sp, "altitude": sp.get("altitude_offset")})
+            data["legs"] = legs
+        else:
+            for i, leg in enumerate(legs):
+                s = resolved_subgoals[i] if i < len(resolved_subgoals) else leg.get("target", "")
+                if self.is_orbit_command(s):
+                    leg["action"] = "ORBIT"
+                    orb = self.parse_orbit_command(s)
+                    if orb:
+                        if not leg.get("orbit"):
+                            leg["orbit"] = orb
+                        else:
+                            for k, v in orb.items():
+                                if leg["orbit"].get(k) is None:
+                                    leg["orbit"][k] = v
+
+        for leg in legs:
+            base_lm = leg.get("base_landmark") or self.extract_base_landmark(leg.get("target", ""))
+            if base_lm:
+                self.register_known_landmark(base_lm)
+            
+            # Synthesize geometric waypoints if needed
+            act = str(leg.get("action", "")).upper()
+            if (act == "FIGURE_8" or "figure 8" in instruction.lower() or "figure-8" in instruction.lower()) and not leg.get("waypoints"):
+                c1 = self.landmark_centers.get("red building", np.array([75.0, 12.0, 0.0]))
+                c2 = self.landmark_centers.get("blue building", np.array([75.0, -14.0, 0.0]))
+                # Check if specific landmarks in instruction
+                for k, coords in self.landmark_centers.items():
+                    if k in instruction.lower() and not np.array_equal(coords, c1):
+                        c2 = coords
+                leg["waypoints"] = self.generate_figure_8_waypoints(c1, c2, radius=12.0, altitude=float(leg.get("altitude") or 15.0))
+                leg["action"] = "CURVE"
+            elif (act == "SPIRAL" or "spiral" in instruction.lower()) and not leg.get("waypoints"):
+                center_lm = base_lm or "tower"
+                c = self.landmark_centers.get(center_lm.lower(), np.array([130.0, -10.0, 0.0]))
+                leg["waypoints"] = self.generate_spiral_waypoints(c, radius=16.0, start_altitude=10.0, end_altitude=40.0, revolutions=2.0)
+                leg["action"] = "CURVE"
+            elif (act in ("SEARCH", "SEARCH_GRID") or "grid" in instruction.lower()) and not leg.get("waypoints"):
+                center_lm = base_lm or "stadium"
+                c = self.landmark_centers.get(center_lm.lower(), np.array([150.0, 30.0, 0.0]))
+                leg["waypoints"] = self.generate_search_grid_waypoints(c, width=40.0, height=40.0, altitude=15.0)
+                leg["action"] = "CURVE"
+
+        data["subgoals"] = resolved_subgoals
+        data["raw_instruction"] = instruction
+        self.last_planned_mission = data
+        return data
+
     def parse_initial_instruction(self, instruction: str) -> List[str]:
         """Decompose natural language route instruction into ordered landmark subgoals.
         
@@ -114,64 +366,17 @@ class DialogueManager:
         if not instruction or not instruction.strip():
             return []
 
-        # Check if instruction is a multi-step sequence with transition keywords or multiple landmarks
-        has_transition = bool(re.search(r'\b(?:then|next|after that|afterwards|finally|followed by|and then|, and)\b', instruction, re.IGNORECASE))
-        lower_inst = instruction.lower()
-        lm_matches = sum(1 for lm in self.KNOWN_DEFAULT_LANDMARKS if lm in lower_inst or any(w in lower_inst.split() for w in lm.split()))
-
-        # Fast single orbit command check (only if not a multi-step sequence)
-        if not has_transition and lm_matches <= 1 and self.is_orbit_command(instruction):
-            orbit_info = self.parse_orbit_command(instruction)
-            if orbit_info and orbit_info.get("target"):
-                rev_part = f" {int(orbit_info['revolutions'])} times" if orbit_info.get("revolutions") else ""
-                facing_part = " facing forward" if orbit_info.get("facing") == "TANGENT" else ""
-                speed_part = f" at {orbit_info['speed']} m/s" if (orbit_info.get("speed") and orbit_info["speed"] != 3.0) else ""
-                radius_part = f" at {orbit_info['radius']}m radius" if (orbit_info.get("radius") and orbit_info["radius"] != 16.0) else ""
-                altitude_part = f" at {orbit_info['altitude']}m altitude" if (orbit_info.get("altitude") and orbit_info["altitude"] != 10.0) else ""
-                direction_part = " clockwise" if orbit_info.get("direction") == "CW" else ""
-                return [f"circle around {orbit_info['target']}{rev_part}{facing_part}{speed_part}{radius_part}{altitude_part}{direction_part}".strip()]
-
         # Attempt Gemini Flash decomposition if client available
-        if self.client is not None:
+        if self.client is not None and not self.mock:
             try:
-                known_str = ", ".join(self.KNOWN_DEFAULT_LANDMARKS)
-                prompt = (
-                    "You are the navigation planner for an autonomous urban drone. "
-                    "Extract the ordered sequence of physical landmark subgoals from this instruction. "
-                    "Resolve shorthand adjectives (e.g. 'red' -> 'red building') to full landmark names. "
-                    f"Known environment landmarks: {known_str}. "
-                    "If the instruction requests visiting all or every landmark (e.g. 'go to every landmark', 'visit all landmarks', 'tour the city', 'explore each landmark', 'visit all buildings'), expand this into the full ordered list of all known environment landmarks: [\"fountain\", \"red building\", \"blue building\", \"tower\", \"hospital\"]. "
-                    "If an instruction specifies a spatial relation or altitude offset (e.g. 'hover 100m above red building', 'go 50m above fountain', '20m in front of tower'), PRESERVE the spatial relation and numeric distance in the subgoal name (e.g. '100m above red building', '50m above fountain', '20m in front of tower'). Do NOT strip altitude or prepositions. "
-                    "If the instruction specifies an orbit or circular inspection around a landmark (e.g. 'hover in circle around blue building', 'circle twice around red building', 'orbit tower'), PRESERVE the orbit instruction in the subgoal name (e.g. 'circle around blue building'). "
-                    "Return ONLY a JSON object formatted as: {\"subgoals\": [\"<landmark1>\", \"<landmark2>\"]}\n\n"
-                    f"Instruction: \"{instruction}\""
-                )
-                raw_text = self._generate_with_gemini(prompt, response_mime_type="application/json")
-                data = json.loads(raw_text)
-                subgoals = data.get("subgoals", [])
-                if isinstance(subgoals, list) and subgoals:
-                    resolved_subgoals = []
-                    for s in subgoals:
-                        res_s = self.resolve_landmark_shorthand(str(s).strip(), resolved_subgoals)
-                        if res_s and (not resolved_subgoals or resolved_subgoals[-1] != res_s):
-                            resolved_subgoals.append(res_s)
-
-                    # Deterministic safeguard: if raw instruction specifies an orbit command or spatial relations that were stripped by LLM, restore/enrich them
-                    if self.is_orbit_command(instruction):
-                        heuristic_subgoals = self._heuristic_parse_instruction(instruction)
-                        if any(self.is_orbit_command(hs) for hs in heuristic_subgoals):
-                            resolved_subgoals = heuristic_subgoals
-                    elif len(resolved_subgoals) == 1:
-                        spatial = self.parse_spatial_relation(instruction)
-                        if spatial.get("relation") != "DEFAULT" and spatial.get("base_landmark"):
-                            if spatial["base_landmark"].lower() == self.extract_base_landmark(resolved_subgoals[0]).lower():
-                                clean_inst = re.sub(r'^(?:hover|fly|go|climb|ascend|descend)\s+(?:at\s+|to\s+)?', '', instruction, flags=re.IGNORECASE).strip()
-                                resolved_subgoals = [self.resolve_landmark_shorthand(clean_inst)]
-
-                    if resolved_subgoals:
-                        return resolved_subgoals
+                plan = self.plan_mission(instruction)
+                if plan and plan.get("subgoals"):
+                    return plan["subgoals"]
             except Exception as e:
                 print(f"[DialogueManager] Gemini instruction parsing failed: {e}. Using heuristic fallback.")
+
+        # Heuristic fallback parser
+        return self._heuristic_parse_instruction(instruction)
 
         # Heuristic fallback parser
         return self._heuristic_parse_instruction(instruction)
@@ -246,25 +451,42 @@ class DialogueManager:
             }
 
         # Attempt Gemini Flash classification if client available
-        if self.client is not None:
+        if self.client is not None and not self.mock:
             try:
+                known_str = ", ".join(self.known_landmarks)
                 prompt = (
-                    "An operator interrupted an autonomous drone mid-flight.\n"
+                    "You are the real-time cognitive interruption manager for an autonomous urban drone.\n"
                     f"Active Target: \"{cur_target_str}\"\n"
-                    f"Known Landmarks in Spatial Memory:\n{memory_summary}\n\n"
+                    f"Known Landmarks in Spatial Memory:\n{memory_summary or 'None'}\n"
+                    f"Known Environment Landmarks: {known_str}\n\n"
                     f"Operator message: \"{msg}\"\n\n"
                     "Classify this operator command into exactly one intent:\n"
-                    "1. \"ORBIT_CIRCLE\": Operator commands circling, orbiting, or revolving around a landmark (e.g. 'hover in circle around blue building', 'circle twice around red building', 'orbit tower facing forward').\n"
-                    "2. \"WAYPOINT_PATH\": Operator provides explicit 3D waypoint coordinate sequences or asks for a discrete waypoint curve path (e.g. 'follow path [[10, 20, -5], ...]').\n"
-                    "3. \"TARGET_CORRECTION\": Divert flight to a newly specified target or spatial waypoint (e.g. '100m above red building', 'fountain', 'in front of tower').\n"
-                    "4. \"RETURN_TO_PAST\": Return to a previously registered landmark in memory.\n"
-                    "5. \"QUERY\": Inquire about landmarks, surroundings, or status.\n"
-                    "6. \"HOVER_STOP\": Pause, hover in place, or stop navigation (ONLY when no new destination, spatial waypoint, orbit, or landmark is specified).\n\n"
-                    "If the operator specifies a spatial offset, altitude, or preposition (e.g. 'hover 100m above red building', 'go 20m in front of tower'), PRESERVE the spatial relation and numeric distance in 'target' (e.g. '100m above red building') and classify as TARGET_CORRECTION.\n\n"
+                    "1. \"HOVER_STOP\": Pause, hover in place, or stop navigation (ONLY when no new destination, spatial waypoint, orbit, or landmark is specified).\n"
+                    "2. \"TARGET_CORRECTION\": Divert flight to a newly specified target, landmark, or spatial waypoint (e.g. '100m above red building', 'warehouse', 'in front of tower', 'switch to red').\n"
+                    "3. \"ORBIT_CIRCLE\": Operator commands circling, orbiting, or revolving around a landmark (e.g. 'circle twice around red building', 'hover in circle around blue building at 18m radius and 12m altitude', 'orbit tower looking ahead', 'circle bridge at 5 m/s').\n"
+                    "4. \"WAYPOINT_PATH\": Operator provides explicit 3D waypoint coordinate sequences or asks for a discrete waypoint curve path (e.g. 'follow path [[10, 20, -5], ...]').\n"
+                    "5. \"RETURN_TO_PAST\": Return to a previously registered landmark in memory (e.g. 'go back to fountain', 'return to blue').\n"
+                    "6. \"ALTITUDE_CHANGE\": Change flight altitude or cruise elevation without changing horizontal target (e.g. 'climb to 40m', 'fly higher', 'descend to 5m', 'altitude 20m').\n"
+                    "7. \"MULTI_SUBGOAL_MISSION\": Operator commands a new multi-step route or mission during flight (e.g. 'cancel that and go from fountain to red building then blue building').\n"
+                    "8. \"QUERY\": Inquire about landmarks, surroundings, memory, or status.\n\n"
+                    "Rules:\n"
+                    "- If the operator specifies a spatial offset, altitude, or preposition (e.g. 'hover 100m above red building', 'go 20m in front of tower', 'divert to warehouse at 30m'), PRESERVE the spatial relation and numeric distance in 'target' and classify as TARGET_CORRECTION.\n"
+                    "- Resolve shorthand adjectives: 'red' -> 'red building', 'blue' -> 'blue building', 'the blue one' -> 'blue building'.\n"
+                    "- For arbitrary novel landmarks (warehouse, stadium, bridge, crane, helipad), preserve the name accurately.\n"
+                    "- For orbits, extract radius (default 16.0), altitude (default 10.0), speed (default 3.0), facing ('INWARD' or 'TANGENT'), revolutions (e.g. twice -> 2.0, thrice -> 3.0, N times -> N, None for continuous), direction ('CCW' or 'CW').\n"
+                    "- Provide a concise, professional operational reply confirming the action.\n\n"
                     "Respond with JSON:\n"
                     "{\n"
-                    "  \"intent\": \"ORBIT_CIRCLE\" | \"WAYPOINT_PATH\" | \"TARGET_CORRECTION\" | \"RETURN_TO_PAST\" | \"QUERY\" | \"HOVER_STOP\",\n"
+                    "  \"intent\": \"HOVER_STOP\" | \"TARGET_CORRECTION\" | \"ORBIT_CIRCLE\" | \"WAYPOINT_PATH\" | \"RETURN_TO_PAST\" | \"ALTITUDE_CHANGE\" | \"MULTI_SUBGOAL_MISSION\" | \"QUERY\",\n"
                     "  \"target\": \"<target landmark name or spatial waypoint or null>\",\n"
+                    "  \"base_landmark\": \"<clean base landmark noun phrase or null>\",\n"
+                    "  \"spatial\": {\n"
+                    "    \"relation\": \"ABOVE\" | \"IN_FRONT\" | \"BEHIND\" | \"LEFT\" | \"RIGHT\" | \"COMPOUND\" | \"DEFAULT\",\n"
+                    "    \"distance\": <float or null>,\n"
+                    "    \"altitude_offset\": <float or null>,\n"
+                    "    \"horizontal_relation\": \"IN_FRONT\" | \"BEHIND\" | \"LEFT\" | \"RIGHT\" | null,\n"
+                    "    \"horizontal_distance\": <float or null>\n"
+                    "  },\n"
                     "  \"radius\": <float or null>,\n"
                     "  \"altitude\": <float or null>,\n"
                     "  \"speed\": <float or null>,\n"
@@ -272,6 +494,7 @@ class DialogueManager:
                     "  \"revolutions\": <float or null>,\n"
                     "  \"direction\": \"CCW\" | \"CW\",\n"
                     "  \"waypoints\": <list of [x, y, z] or null>,\n"
+                    "  \"subgoals\": <list of string subgoals or null>,\n"
                     "  \"reply\": \"<concise confirmation to operator>\"\n"
                     "}"
                 )
@@ -279,32 +502,72 @@ class DialogueManager:
                 data = json.loads(raw_text)
                 data["raw_message"] = msg
 
-                if data.get("intent") == "ORBIT_CIRCLE" or self.is_orbit_command(msg):
-                    orbit_info = self.parse_orbit_command(msg)
-                    if orbit_info and orbit_info.get("target"):
-                        data["intent"] = "ORBIT_CIRCLE"
-                        data["target"] = orbit_info["target"]
-                        data["base_landmark"] = orbit_info["base_landmark"]
-                        data["radius"] = data.get("radius") or orbit_info["radius"]
-                        data["altitude"] = data.get("altitude") or orbit_info["altitude"]
-                        data["speed"] = data.get("speed") or orbit_info["speed"]
-                        data["facing"] = data.get("facing") or orbit_info["facing"]
-                        data["revolutions"] = data.get("revolutions") if "revolutions" in data else orbit_info["revolutions"]
-                        data["direction"] = data.get("direction") or orbit_info["direction"]
-                        data["waypoints"] = orbit_info.get("waypoints")
-                        if not data.get("reply"):
-                            rev_str = f" for {orbit_info['revolutions']:.0f} revolutions" if orbit_info['revolutions'] else " continuously"
-                            data["reply"] = f"Orbiting {orbit_info['target']}{rev_str} at {data['radius']:.1f}m radius, {data['altitude']:.1f}m altitude."
-                        return data
+                intent = data.get("intent")
 
-                raw_spatial = self.parse_spatial_relation(msg)
+                # If explicit waypoint coordinates are in message, ensure waypoints list is populated
+                if intent == "WAYPOINT_PATH" or self.is_explicit_waypoint_path(msg):
+                    if not data.get("waypoints"):
+                        wp_match = re.findall(r'\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]', msg)
+                        if wp_match:
+                            data["waypoints"] = [[float(x), float(y), float(z)] for x, y, z in wp_match]
+                    data["intent"] = "WAYPOINT_PATH"
+                    if not data.get("speed"):
+                        m_spd = re.search(r'\b(?:speed|velocity|at|spd)\s*(?:of|=|:)?\s*(\d+(?:\.\d+)?)\s*(?:m/s|mps)?\b', msg, re.I)
+                        data["speed"] = float(m_spd.group(1)) if m_spd else 3.0
+                    if not data.get("facing"):
+                        data["facing"] = "INWARD" if "inward" in msg.lower() else "TANGENT"
+                    if not data.get("reply"):
+                        wps_len = len(data.get("waypoints") or [])
+                        data["reply"] = f"Executing continuous 3D waypoint curve ({wps_len} points)."
+                    return data
+
+                # Orbit processing: validate and enrich extracted parameters
+                if intent == "ORBIT_CIRCLE" or self.is_orbit_command(msg):
+                    data["intent"] = "ORBIT_CIRCLE"
+                    tgt = data.get("target") or msg
+                    resolved_tgt = self.resolve_landmark_shorthand(tgt)
+                    base_lm = data.get("base_landmark") or self.extract_base_landmark(resolved_tgt)
+                    data["target"] = resolved_tgt
+                    data["base_landmark"] = base_lm
+
+                    # Use regex extractor only for missing fields
+                    h_orbit = self.parse_orbit_command(msg)
+                    if h_orbit:
+                        if not data.get("radius"):
+                            data["radius"] = h_orbit["radius"]
+                        if not data.get("altitude"):
+                            data["altitude"] = h_orbit["altitude"]
+                        if not data.get("speed") and h_orbit.get("speed") != 3.0:
+                            data["speed"] = h_orbit["speed"]
+                        if not data.get("facing"):
+                            data["facing"] = h_orbit["facing"]
+                        if "revolutions" not in data or data["revolutions"] is None:
+                            data["revolutions"] = h_orbit["revolutions"]
+                        if not data.get("direction"):
+                            data["direction"] = h_orbit["direction"]
+                        if not data.get("waypoints") and h_orbit.get("waypoints"):
+                            data["waypoints"] = h_orbit["waypoints"]
+
+                    data["radius"] = float(data.get("radius") or 16.0)
+                    data["altitude"] = float(data.get("altitude") or 10.0)
+                    data["speed"] = float(data.get("speed") or 3.0)
+                    data["facing"] = "TANGENT" if str(data.get("facing")).upper() == "TANGENT" else "INWARD"
+                    data["direction"] = "CW" if str(data.get("direction")).upper() in ("CW", "CLOCKWISE") else "CCW"
+
+                    if not data.get("reply"):
+                        rev_str = f" for {data['revolutions']:.0f} revolutions" if data.get("revolutions") else " continuously"
+                        facing_str = f" ({data['facing'].lower()} facing)"
+                        data["reply"] = f"Orbiting {data['target']}{rev_str} at {data['radius']:.1f}m radius, {data['altitude']:.1f}m altitude{facing_str}."
+                    return data
+
+                # Target correction & Return to past: resolve shorthand and extract spatial offsets
                 tgt = data.get("target") or msg
                 resolved_tgt = self.resolve_landmark_shorthand(tgt)
 
-                # Deterministic safeguard: if raw message had a spatial constraint that was stripped, restore it
+                # Deterministic safeguard: if raw message had spatial relation that LLM stripped, restore it
+                raw_spatial = self.parse_spatial_relation(msg)
                 if raw_spatial.get("relation") != "DEFAULT" and raw_spatial.get("base_landmark"):
                     if raw_spatial["base_landmark"].lower() == self.extract_base_landmark(resolved_tgt).lower():
-                        data["intent"] = "TARGET_CORRECTION"
                         clean_msg = re.sub(r'^(?:hover|fly|go|climb|ascend|descend)\s+(?:at\s+|to\s+)?', '', msg, flags=re.IGNORECASE).strip()
                         resolved_tgt = self.resolve_landmark_shorthand(clean_msg)
 
@@ -312,6 +575,12 @@ class DialogueManager:
                 data["spatial"] = self.parse_spatial_relation(resolved_tgt)
                 if data["spatial"].get("base_landmark"):
                     data["base_landmark"] = data["spatial"]["base_landmark"]
+                elif not data.get("base_landmark"):
+                    data["base_landmark"] = self.extract_base_landmark(resolved_tgt)
+
+                if intent == "MULTI_SUBGOAL_MISSION" and not data.get("subgoals"):
+                    data["subgoals"] = self.parse_initial_instruction(msg)
+
                 return data
             except Exception as e:
                 print(f"[DialogueManager] Gemini interruption handling failed: {e}. Using heuristic fallback.")
@@ -390,6 +659,93 @@ class DialogueManager:
         return points
 
     @classmethod
+    def generate_figure_8_waypoints(
+        cls,
+        center1: np.ndarray,
+        center2: np.ndarray,
+        radius: float = 12.0,
+        altitude: float = 15.0,
+        num_points: int = 32
+    ) -> List[List[float]]:
+        """Generate smooth 3D continuous waypoint coordinates forming a figure-8 between two centers.
+        
+        Traces a smooth loop around center 1 (CCW) followed by a smooth loop around center 2 (CW).
+        """
+        c1 = np.asarray(center1, dtype=float)[:2]
+        c2 = np.asarray(center2, dtype=float)[:2]
+        target_z = -float(altitude)
+        points = []
+        half = max(8, num_points // 2)
+
+        # Loop 1 around center 1 (Counter-Clockwise)
+        for i in range(half):
+            theta = 2.0 * math.pi * i / half
+            x = round(float(c1[0] + radius * math.cos(theta)), 2)
+            y = round(float(c1[1] + radius * math.sin(theta)), 2)
+            points.append([x, y, round(target_z, 2)])
+
+        # Loop 2 around center 2 (Clockwise)
+        for i in range(half):
+            theta = -2.0 * math.pi * i / half
+            x = round(float(c2[0] + radius * math.cos(theta)), 2)
+            y = round(float(c2[1] + radius * math.sin(theta)), 2)
+            points.append([x, y, round(target_z, 2)])
+
+        return points
+
+    @classmethod
+    def generate_spiral_waypoints(
+        cls,
+        center: np.ndarray,
+        radius: float = 16.0,
+        start_altitude: float = 10.0,
+        end_altitude: float = 40.0,
+        revolutions: float = 2.0,
+        num_points: int = 32
+    ) -> List[List[float]]:
+        """Generate 3D ascending/descending spiral trajectory waypoints around a landmark center."""
+        c = np.asarray(center, dtype=float)[:2]
+        points = []
+        total_rad = revolutions * 2.0 * math.pi
+        for i in range(num_points):
+            frac = float(i) / max(1, num_points - 1)
+            theta = frac * total_rad
+            curr_alt = start_altitude + frac * (end_altitude - start_altitude)
+            x = round(float(c[0] + radius * math.cos(theta)), 2)
+            y = round(float(c[1] + radius * math.sin(theta)), 2)
+            z = round(-float(curr_alt), 2)
+            points.append([x, y, z])
+        return points
+
+    @classmethod
+    def generate_search_grid_waypoints(
+        cls,
+        center: np.ndarray,
+        width: float = 40.0,
+        height: float = 40.0,
+        altitude: float = 15.0,
+        step: float = 10.0
+    ) -> List[List[float]]:
+        """Generate 3D lawnmower search grid waypoints centered around a point."""
+        c = np.asarray(center, dtype=float)[:2]
+        x_min, x_max = c[0] - width / 2.0, c[0] + width / 2.0
+        y_min, y_max = c[1] - height / 2.0, c[1] + height / 2.0
+        target_z = -float(altitude)
+        points = []
+        curr_y = y_min
+        sweep_forward = True
+        while curr_y <= y_max + 1e-3:
+            if sweep_forward:
+                points.append([round(float(x_min), 2), round(float(curr_y), 2), round(target_z, 2)])
+                points.append([round(float(x_max), 2), round(float(curr_y), 2), round(target_z, 2)])
+            else:
+                points.append([round(float(x_max), 2), round(float(curr_y), 2), round(target_z, 2)])
+                points.append([round(float(x_min), 2), round(float(curr_y), 2), round(target_z, 2)])
+            curr_y += step
+            sweep_forward = not sweep_forward
+        return points
+
+    @classmethod
     def parse_orbit_command(cls, text: str) -> Optional[Dict[str, Any]]:
         """Parse structured parameters from natural language orbit/circling command.
         
@@ -465,6 +821,9 @@ class DialogueManager:
 
         # 7. Landmark Extraction
         matched_target = None
+        stop_words = {"twice", "thrice", "once", "around", "in", "forward", "clockwise", "counter-clockwise", "tangent", "looking", "facing", "at", "with", "the", "a", "an"}
+
+        # 7a. First check known default landmarks
         cands = []
         for k in cls.KNOWN_DEFAULT_LANDMARKS:
             idx = lower.find(k)
@@ -474,6 +833,7 @@ class DialogueManager:
             cands.sort(key=lambda t: t[0])
             matched_target = cands[0][1]
 
+        # 7b. Check shorthand adjectives
         if not matched_target:
             short_cands = []
             for k in ["blue", "red", "fountain", "tower", "hospital"]:
@@ -484,13 +844,27 @@ class DialogueManager:
                 short_cands.sort(key=lambda t: t[0])
                 matched_target = short_cands[0][1]
 
+        # 7c. Check after 'around' or 'round'
         if not matched_target:
-            m_target = re.search(r'\b(?:around|round|orbiting|circling|circle|orbit)\s+(?:the\s+|a\s+|an\s+)?([a-zA-Z0-9_\s-]+?)(?=\s+(?:at|with|facing|looking|twice|once|thrice|\d+\s*(?:times|revolutions?|laps?|m|meters?|radius|altitude|speed)|clockwise|counter-clockwise|ccw|cw)|$)', lower)
-            if m_target:
-                cand = cls.clean_landmark_name(m_target.group(1))
-                matched_target = cls.resolve_landmark_shorthand(cand)
-            else:
-                matched_target = "blue building"
+            m_around = re.search(r'\b(?:around|round)\s+(?:the\s+|a\s+|an\s+)?([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)', lower)
+            if m_around:
+                cand = cls.clean_landmark_name(m_around.group(1)).strip()
+                cand = re.sub(r'\s+(?:twice|thrice|once|facing|looking|at|with|\d+).*$', '', cand).strip()
+                if cand and cand not in stop_words:
+                    matched_target = cls.resolve_landmark_shorthand(cand)
+
+        # 7d. Check after 'orbit' or 'circle'
+        if not matched_target:
+            m_verb = re.search(r'\b(?:orbit|circle|circling|orbiting)\s+(?:the\s+|a\s+|an\s+)?([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)', lower)
+            if m_verb:
+                cand = cls.clean_landmark_name(m_verb.group(1)).strip()
+                cand = re.sub(r'\s+(?:twice|thrice|once|facing|looking|at|with|\d+).*$', '', cand).strip()
+                if cand and cand not in stop_words:
+                    matched_target = cls.resolve_landmark_shorthand(cand)
+
+        # 7e. Fallback if literally no landmark found
+        if not matched_target:
+            matched_target = "blue building"
 
         base_landmark = cls.extract_base_landmark(matched_target)
 
@@ -729,6 +1103,40 @@ class DialogueManager:
                 "altitude_offset": alt,
                 "horizontal_relation": h_rel,
                 "horizontal_distance": h_dist,
+                "base_landmark": lm,
+                "raw": raw
+            }
+
+        # Pattern 4: Compass offsets (e.g. '15m north and 20m east of red building at 30m altitude', '20m north of fountain')
+        m_compass = re.match(
+            r'^(?:(\d+(?:\.\d+)?)\s*(?:m|meter|meters)?\s*(north|south|east|west))\s*(?:and\s+(\d+(?:\.\d+)?)\s*(?:m|meter|meters)?\s*(north|south|east|west))?\s+(?:of\s+)?(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+at\s+(\d+(?:\.\d+)?)\s*(?:m|meter|meters)?(?:\s+(?:altitude|height|elevation))?)?$',
+            cleaned, re.IGNORECASE
+        )
+        if m_compass:
+            d1, dir1 = float(m_compass.group(1)), m_compass.group(2).lower()
+            d2 = float(m_compass.group(3)) if m_compass.group(3) else None
+            dir2 = m_compass.group(4).lower() if m_compass.group(4) else None
+            lm = _resolve_lm(m_compass.group(5))
+            alt = float(m_compass.group(6)) if m_compass.group(6) else None
+            dx, dy = 0.0, 0.0
+            for d, dr in [(d1, dir1), (d2, dir2)]:
+                if d is not None and dr:
+                    if dr == "north":
+                        dx += d
+                    elif dr == "south":
+                        dx -= d
+                    elif dr == "east":
+                        dy += d
+                    elif dr == "west":
+                        dy -= d
+            return {
+                "relation": "COMPASS",
+                "distance": round(math.hypot(dx, dy), 2),
+                "altitude_offset": alt,
+                "horizontal_relation": "COMPASS",
+                "horizontal_distance": round(math.hypot(dx, dy), 2),
+                "dx": dx,
+                "dy": dy,
                 "base_landmark": lm,
                 "raw": raw
             }
@@ -990,6 +1398,26 @@ class DialogueManager:
         if any(re.search(pat, lower) for pat in collective_patterns):
             return list(self.KNOWN_DEFAULT_LANDMARKS)
 
+        # Geometric figure-8 pattern
+        if any(w in lower for w in ["figure 8", "figure-8", "figure eight"]):
+            c1 = self.landmark_centers.get("red building", np.array([75.0, 12.0, 0.0]))
+            c2 = self.landmark_centers.get("blue building", np.array([75.0, -14.0, 0.0]))
+            for k, coords in self.landmark_centers.items():
+                if k in lower and not np.array_equal(coords, c1):
+                    c2 = coords
+            wps = self.generate_figure_8_waypoints(c1, c2, radius=12.0, altitude=15.0)
+            return [f"follow curve {wps}"]
+
+        # Geometric spiral climb/descent pattern
+        if "spiral" in lower:
+            c = np.array([130.0, -10.0, 0.0])
+            for k, coords in self.landmark_centers.items():
+                if k in lower:
+                    c = coords
+                    break
+            wps = self.generate_spiral_waypoints(c, radius=16.0, start_altitude=10.0, end_altitude=40.0, revolutions=2.0)
+            return [f"follow curve {wps}"]
+
         # 1. Match 'from <origin> to <destination>' clauses
         from_to_pat = r'\bfrom\s+(.+?)\s+to\s+(.+?)(?=(?:\s*,\s*|\s+and\s+(?:also\s+)?|\s+then\s+|\s+after\s+that\s+|\s+next\s+|\s+to\s+)|$)'
         matches = list(re.finditer(from_to_pat, text, re.IGNORECASE))
@@ -1079,6 +1507,41 @@ class DialogueManager:
                 "subgoals": subgoals,
                 "instruction": msg,
                 "reply": f"Understood. Starting multi-step mission ({len(subgoals)} subgoals): {' -> '.join(subgoals)}.",
+                "raw_message": msg
+            }
+
+        # Check for figure-8 or spiral interruption
+        if any(w in lower for w in ["figure 8", "figure-8", "figure eight"]):
+            c1 = self.landmark_centers.get("red building", np.array([75.0, 12.0, 0.0]))
+            c2 = self.landmark_centers.get("blue building", np.array([75.0, -14.0, 0.0]))
+            for k, coords in self.landmark_centers.items():
+                if k in lower and not np.array_equal(coords, c1):
+                    c2 = coords
+            wps = self.generate_figure_8_waypoints(c1, c2, radius=12.0, altitude=15.0)
+            return {
+                "intent": "WAYPOINT_PATH",
+                "waypoints": wps,
+                "speed": 4.0,
+                "facing": "TANGENT",
+                "target": "figure_8_curve",
+                "reply": "Executing continuous figure-8 trajectory.",
+                "raw_message": msg
+            }
+
+        if "spiral" in lower:
+            c = np.array([130.0, -10.0, 0.0])
+            for k, coords in self.landmark_centers.items():
+                if k in lower:
+                    c = coords
+                    break
+            wps = self.generate_spiral_waypoints(c, radius=16.0, start_altitude=10.0, end_altitude=40.0, revolutions=2.0)
+            return {
+                "intent": "WAYPOINT_PATH",
+                "waypoints": wps,
+                "speed": 3.5,
+                "facing": "INWARD",
+                "target": "spiral_curve",
+                "reply": "Executing continuous 3D spiral climb trajectory.",
                 "raw_message": msg
             }
 

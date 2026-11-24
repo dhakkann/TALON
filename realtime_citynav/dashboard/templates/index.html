@@ -95,6 +95,12 @@
       </div>
     </div>
     <div class="flex items-center space-x-2 shrink-0">
+      <button onclick="fetch('/api/takeoff', {method:'POST'})" title="Arm and take off to cruise altitude" class="px-3 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-800 rounded font-semibold text-xs tracking-wide uppercase transition">
+        Takeoff
+      </button>
+      <button onclick="fetch('/api/land', {method:'POST'})" title="Land drone safely" class="px-3 py-1 bg-amber-950 hover:bg-amber-900 text-amber-400 border border-amber-800 rounded font-semibold text-xs tracking-wide uppercase transition">
+        Land
+      </button>
       <button onclick="emergencyHover()" class="px-3 py-1 bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-800 rounded font-semibold text-xs tracking-wide uppercase transition">
         Emergency Hover
       </button>

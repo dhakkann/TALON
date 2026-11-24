@@ -254,6 +254,36 @@ def create_app(system_orchestrator=None):
             app.orchestrator.emergency_hover()
         return jsonify({"status": "hovering"})
 
+    @app.route("/api/takeoff", methods=["POST"])
+    def takeoff_command():
+        """Trigger takeoff to cruise altitude."""
+        if app.orchestrator is not None:
+            alt = app.orchestrator.config.flight.takeoff_altitude
+            success = app.orchestrator.flight.takeoff(altitude=alt)
+            with app.orchestrator._state_lock:
+                app.orchestrator.flight_mode = "HOVERING"
+            app.orchestrator.narrator.emit_event(
+                "TAKEOFF_COMPLETED",
+                f"Manual takeoff initiated. Climbing to {alt:.1f}m.",
+                {"altitude": alt}
+            )
+            return jsonify({"status": "takeoff", "altitude": alt, "success": success})
+        return jsonify({"status": "error", "message": "No orchestrator"}), 500
+
+    @app.route("/api/land", methods=["POST"])
+    def land_command():
+        """Trigger landing sequence."""
+        if app.orchestrator is not None:
+            success = app.orchestrator.flight.land()
+            with app.orchestrator._state_lock:
+                app.orchestrator.flight_mode = "LANDING"
+            app.orchestrator.narrator.emit_event(
+                "LANDING_INITIATED",
+                "Manual landing sequence initiated."
+            )
+            return jsonify({"status": "landing", "success": success})
+        return jsonify({"status": "error", "message": "No orchestrator"}), 500
+
     @app.route("/api/telemetry")
     def get_telemetry():
         if app.orchestrator is not None:

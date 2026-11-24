@@ -628,20 +628,21 @@ class RealtimeFlightController:
         self._last_step_time = now
 
         if not self.mock and self.client is not None and _AIRSIM_AVAILABLE:
-            try:
-                # Non-blocking continuous velocity dispatch with active heading alignment
-                yaw_mode = airsim.YawMode(is_rate=False, yaw_or_rate=float(math.degrees(target_yaw)))
-                self.client.moveByVelocityAsync(
-                    float(v_cmd[0]),
-                    float(v_cmd[1]),
-                    float(v_cmd[2]),
-                    duration=0.1,
-                    drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
-                    yaw_mode=yaw_mode,
-                    vehicle_name=self.vehicle_name
-                )
-            except Exception as e:
-                print(f"[FlightController] Error issuing moveByVelocityAsync: {e}")
+            with self._lock:
+                try:
+                    # Non-blocking continuous velocity dispatch with active heading alignment
+                    yaw_mode = airsim.YawMode(is_rate=False, yaw_or_rate=float(math.degrees(target_yaw)))
+                    self.client.moveByVelocityAsync(
+                        float(v_cmd[0]),
+                        float(v_cmd[1]),
+                        float(v_cmd[2]),
+                        duration=0.1,
+                        drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                        yaw_mode=yaw_mode,
+                        vehicle_name=self.vehicle_name
+                    )
+                except Exception as e:
+                    print(f"[FlightController] Error issuing moveByVelocityAsync: {e}")
         else:
             # Kinematic simulation integration step
             with self._lock:

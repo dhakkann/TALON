@@ -99,6 +99,23 @@ class CityNavOrchestrator:
         self._frame_lock = threading.RLock()
         self._state_lock = threading.RLock()
 
+        # Dedicated AirSim camera client (avoids Msgpack socket buffer collisions with flight controller)
+        self._camera_client = None
+        self._last_airsim_rgb: Optional[np.ndarray] = None
+        self._last_airsim_depth: Optional[np.ndarray] = None
+        if not self.config.mock_airsim and _AIRSIM_AVAILABLE:
+            try:
+                self._camera_client = airsim.MultirotorClient(
+                    ip=self.config.airsim.ip,
+                    port=self.config.airsim.port,
+                    timeout_value=3
+                )
+                self._camera_client.confirmConnection()
+                print(f"[Orchestrator] Dedicated AirSim camera client connected to {self.config.airsim.ip}:{self.config.airsim.port}")
+            except Exception as e:
+                print(f"[Orchestrator] AirSim camera client connection warning: {e}")
+                self._camera_client = None
+
         # Thread handles
         self._flight_thread: Optional[threading.Thread] = None
         self._perception_thread: Optional[threading.Thread] = None
@@ -828,9 +845,10 @@ class CityNavOrchestrator:
         """Fetch RGB and metric depth images from AirSim or generate synthetic frames."""
         w, h = self.config.airsim.image_width, self.config.airsim.image_height
 
-        if not self.flight.mock and self.flight.client is not None and _AIRSIM_AVAILABLE:
+        cam_client = self._camera_client or (self.flight.client if not self.flight.mock else None)
+        if cam_client is not None and _AIRSIM_AVAILABLE and not self.config.mock_airsim:
             try:
-                responses = self.flight.client.simGetImages([
+                responses = cam_client.simGetImages([
                     airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.Scene, False, False),
                     airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.DepthPlanar, True, False)
                 ], vehicle_name=self.flight.vehicle_name)
@@ -850,9 +868,20 @@ class CityNavOrchestrator:
                     )
                     depth_arr = np.array(depth, dtype=np.float32)
                     if rgb is not None and depth_arr is not None:
+                        # Resize to standard config resolution if AirSim returned different aspect/size
+                        if resp_w != w or resp_h != h:
+                            rgb = cv2.resize(rgb, (w, h), interpolation=cv2.INTER_LINEAR)
+                            depth_arr = cv2.resize(depth_arr, (w, h), interpolation=cv2.INTER_NEAREST)
+                        self._last_airsim_rgb = rgb
+                        self._last_airsim_depth = depth_arr
                         return rgb, depth_arr
-            except Exception:
-                pass
+            except Exception as e:
+                # If network frame dropped momentarily, reuse last frame instead of falling back to synthetic
+                if self._last_airsim_rgb is not None:
+                    return self._last_airsim_rgb, self._last_airsim_depth
+
+        if self._last_airsim_rgb is not None and not self.config.mock_airsim:
+            return self._last_airsim_rgb, self._last_airsim_depth
 
         # Generate synthetic realistic RGB-D frame for simulation fallback
         return self._generate_synthetic_frame(w, h)
@@ -1111,6 +1140,7 @@ def main():
     parser.add_argument("--speed", type=float, default=4.0, help="Cruise speed in m/s")
     parser.add_argument("--port", type=int, default=5000, help="Dashboard web port")
     parser.add_argument("--instruction", type=str, default="", help="Initial navigation instruction")
+    parser.add_argument("--takeoff", "--auto-takeoff", dest="auto_takeoff", action="store_true", help="Automatically arm and take off on startup")
     parser.add_argument("--api-key", "--gemini-key", type=str, default="", help="Gemini 2.0 Flash API Key")
     parser.add_argument("--voice-mic", action="store_true", help="Enable background local microphone listener for hands-free voice control")
     args = parser.parse_args()
@@ -1143,6 +1173,18 @@ def main():
     if args.instruction:
         time.sleep(1.0)
         orchestrator.start_mission(args.instruction)
+    elif args.auto_takeoff:
+        time.sleep(1.0)
+        print("[Orchestrator] Auto-takeoff requested on startup...")
+        alt = cfg.flight.takeoff_altitude
+        orchestrator.flight.takeoff(altitude=alt)
+        with orchestrator._state_lock:
+            orchestrator.flight_mode = "HOVERING"
+        orchestrator.narrator.emit_event(
+            "TAKEOFF_COMPLETED",
+            f"Autonomous takeoff completed. Hovering at {alt:.1f}m.",
+            {"altitude": alt}
+        )
 
     # Keep main thread alive
     try:

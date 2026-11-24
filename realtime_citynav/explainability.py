@@ -13,13 +13,15 @@ class NarrationEvent:
     event_type: str
     message: str
     telemetry: Dict[str, Any] = field(default_factory=dict)
+    spoken_text: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "timestamp": self.timestamp,
             "event_type": self.event_type,
             "message": self.message,
-            "telemetry": self.telemetry
+            "telemetry": self.telemetry,
+            "spoken_text": self.spoken_text
         }
 
 
@@ -46,14 +48,34 @@ class LiveRationaleNarrator:
         self,
         event_type: str,
         message: str,
-        telemetry: Optional[Dict[str, Any]] = None
+        telemetry: Optional[Dict[str, Any]] = None,
+        spoken_text: Optional[str] = None
     ) -> NarrationEvent:
         """Emit an event-driven narration and broadcast to listeners."""
+        # Synthesize concise spoken feedback for critical events if not explicitly passed
+        if spoken_text is None:
+            if event_type == "EMERGENCY_HOVER":
+                spoken_text = "Emergency hover engaged. Holding position."
+            elif event_type == "TARGET_ACQUIRED":
+                tgt = (telemetry or {}).get("target", "landmark")
+                spoken_text = f"Target acquired: {tgt}."
+            elif event_type == "ORBIT_STARTED":
+                tgt = (telemetry or {}).get("target", "landmark")
+                spoken_text = f"Orbiting {tgt}."
+            elif event_type == "OBSTACLE_AVOIDANCE":
+                spoken_text = "Obstacle detected. Avoidance maneuver active."
+            elif event_type == "VOICE_COMMAND":
+                cmd = (telemetry or {}).get("transcript", "")
+                spoken_text = f"Acknowledged: {cmd}" if cmd else "Voice command received."
+            elif event_type == "QUERY_REPLY":
+                spoken_text = message[:120]
+
         event = NarrationEvent(
             timestamp=time.time(),
             event_type=event_type,
             message=message,
-            telemetry=telemetry or {}
+            telemetry=telemetry or {},
+            spoken_text=spoken_text
         )
         
         with self._lock:

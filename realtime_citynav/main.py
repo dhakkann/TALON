@@ -22,6 +22,7 @@ from realtime_citynav.spatial_memory import SpatialMemory
 from realtime_citynav.dialogue_manager import DialogueManager
 from realtime_citynav.explainability import LiveRationaleNarrator
 from realtime_citynav.dashboard.app import DashboardServer
+from realtime_citynav.voice import VoiceTranscriber, VoiceListenerThread
 
 try:
     import airsim
@@ -103,6 +104,14 @@ class CityNavOrchestrator:
         self._perception_thread: Optional[threading.Thread] = None
         self._cognitive_thread: Optional[threading.Thread] = None
         self._dashboard_server: Optional[DashboardServer] = None
+
+        # Voice subsystem
+        self.voice_transcriber = VoiceTranscriber(
+            api_key=self.config.cognitive.api_key,
+            model_name=self.config.voice.model_name,
+            mock=self.config.mock_gemini
+        )
+        self._voice_listener: Optional[VoiceListenerThread] = None
 
     def start_mission(self, instruction: str) -> List[str]:
         """Initiate autonomous flight mission based on natural language instruction."""
@@ -1022,8 +1031,8 @@ class CityNavOrchestrator:
             "is_following_path": orbit_telem["is_following_path"],
         }
 
-    def start(self, start_dashboard: Optional[bool] = None) -> None:
-        """Start all orchestrator threads and dashboard server."""
+    def start(self, start_dashboard: Optional[bool] = None, start_voice_mic: bool = False) -> None:
+        """Start all orchestrator threads, dashboard server, and optional voice mic listener."""
         self.running = True
 
         if start_dashboard is None:
@@ -1038,19 +1047,30 @@ class CityNavOrchestrator:
             )
             self._dashboard_server.start()
 
-        # 2. Launch high-frequency perception worker
+        # 2. Launch optional background local microphone listener
+        if start_voice_mic:
+            self._voice_listener = VoiceListenerThread(
+                command_callback=self.queue_command,
+                transcriber=self.voice_transcriber,
+                sample_rate=self.config.voice.mic_sample_rate,
+                energy_threshold=self.config.voice.vad_energy_threshold,
+                device_index=self.config.voice.mic_device_index
+            )
+            self._voice_listener.start()
+
+        # 3. Launch high-frequency perception worker
         self._perception_thread = threading.Thread(
             target=self._perception_loop, daemon=True, name="PerceptionWorkerThread"
         )
         self._perception_thread.start()
 
-        # 3. Launch high-frequency flight control loop (20-30 Hz)
+        # 4. Launch high-frequency flight control loop (20-30 Hz)
         self._flight_thread = threading.Thread(
             target=self._flight_loop, daemon=True, name="FlightControlLoopThread"
         )
         self._flight_thread.start()
 
-        # 4. Launch asynchronous dialogue & cognitive loop
+        # 5. Launch asynchronous dialogue & cognitive loop
         self._cognitive_thread = threading.Thread(
             target=self._cognitive_loop, daemon=True, name="CognitiveWorkerThread"
         )
@@ -1060,6 +1080,8 @@ class CityNavOrchestrator:
             print("\n========================================================")
             print(" CityNav Real-Time Autonomous Flight System Active!")
             print(f" Dashboard URL: http://localhost:{self.config.dashboard.port}")
+            if start_voice_mic:
+                print(" Local Voice Microphone Listener: ACTIVE")
             print(" Press Ctrl+C in terminal to stop.")
             print("========================================================\n")
 
@@ -1067,6 +1089,12 @@ class CityNavOrchestrator:
         """Signal all threads to shut down and land drone."""
         print("\n[Orchestrator] Stopping system...")
         self.running = False
+        if self._voice_listener is not None:
+            try:
+                self._voice_listener.stop()
+            except Exception:
+                pass
+            self._voice_listener = None
         try:
             self.flight.land()
         except Exception:
@@ -1084,6 +1112,7 @@ def main():
     parser.add_argument("--port", type=int, default=5000, help="Dashboard web port")
     parser.add_argument("--instruction", type=str, default="", help="Initial navigation instruction")
     parser.add_argument("--api-key", "--gemini-key", type=str, default="", help="Gemini 2.0 Flash API Key")
+    parser.add_argument("--voice-mic", action="store_true", help="Enable background local microphone listener for hands-free voice control")
     args = parser.parse_args()
 
     cfg = SystemConfig()
@@ -1109,7 +1138,7 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    orchestrator.start()
+    orchestrator.start(start_voice_mic=args.voice_mic)
 
     if args.instruction:
         time.sleep(1.0)

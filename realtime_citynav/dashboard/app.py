@@ -10,6 +10,8 @@ from flask_cors import CORS
 import cv2
 import numpy as np
 
+from realtime_citynav.voice import AudioProcessor, VoiceTranscriber
+
 # Suppress verbose Flask request logging to keep console clean
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
@@ -21,6 +23,16 @@ def create_app(system_orchestrator=None):
 
     # Reference to orchestrator holding flight controller, perception, memory, dialogue
     app.orchestrator = system_orchestrator
+
+    # Initialize voice transcriber
+    transcriber = None
+    if app.orchestrator is not None:
+        transcriber = getattr(app.orchestrator, "voice_transcriber", None)
+    if transcriber is None:
+        mock_mode = app.orchestrator.config.mock_gemini if app.orchestrator else True
+        api_key = app.orchestrator.config.cognitive.api_key if app.orchestrator else ""
+        transcriber = VoiceTranscriber(api_key=api_key, mock=mock_mode)
+    app.voice_transcriber = transcriber
 
     @app.route("/")
     def index():
@@ -105,6 +117,122 @@ def create_app(system_orchestrator=None):
             )
             return jsonify({"status": "queued", "message": message})
         return jsonify({"status": "ok", "message": message})
+
+    @app.route("/api/voice_command", methods=["POST"])
+    def voice_command():
+        """Process transcribed speech input from Web Speech API or client STT."""
+        body = request.get_json(force=True, silent=True) or {}
+        transcript = body.get("transcript", "").strip()
+        confidence = float(body.get("confidence", 1.0))
+
+        if not transcript:
+            return jsonify({"status": "error", "message": "Empty transcript"}), 400
+
+        if app.orchestrator is not None:
+            # 1. Instant emergency halt fast-path (<1ms)
+            if app.orchestrator.dialogue.is_hover_stop_command(transcript):
+                app.orchestrator.emergency_hover()
+                app.orchestrator.narrator.emit_event(
+                    "EMERGENCY_HOVER",
+                    f"Voice Emergency Halt: \"{transcript}\"",
+                    {"transcript": transcript, "confidence": confidence},
+                    spoken_text="Emergency hover engaged. Holding position."
+                )
+                return jsonify({
+                    "status": "emergency_hover",
+                    "action": "HOVER",
+                    "transcript": transcript,
+                    "confidence": confidence
+                })
+
+            # 2. General flight command routing
+            app.orchestrator.queue_command(transcript)
+            app.orchestrator.narrator.emit_event(
+                "VOICE_COMMAND",
+                f"Voice Operator ({confidence * 100:.0f}%): \"{transcript}\"",
+                {"transcript": transcript, "confidence": confidence},
+                spoken_text=f"Acknowledged: {transcript}"
+            )
+            return jsonify({
+                "status": "queued",
+                "transcript": transcript,
+                "confidence": confidence
+            })
+
+        return jsonify({"status": "ok", "transcript": transcript})
+
+    @app.route("/api/voice_audio", methods=["POST"])
+    def voice_audio():
+        """Process raw audio payload (WAV/WebM) via server-side VoiceTranscriber."""
+        audio_bytes = b""
+        mime_type = request.content_type or "audio/wav"
+
+        # Check if multipart form
+        if request.files and "audio" in request.files:
+            audio_bytes = request.files["audio"].read()
+        elif request.data:
+            # Raw binary body
+            audio_bytes = request.data
+        else:
+            body = request.get_json(force=True, silent=True) or {}
+            b64_str = body.get("audio_base64", "")
+            if b64_str:
+                audio_bytes = AudioProcessor.base64_to_wav(b64_str)
+
+        if not audio_bytes:
+            return jsonify({"status": "error", "message": "No audio payload provided"}), 400
+
+        transcriber = getattr(app, "voice_transcriber", None)
+        if transcriber is None:
+            transcriber = VoiceTranscriber(mock=True)
+
+        res = transcriber.transcribe_audio(audio_bytes, mime_type=mime_type)
+        transcript = res.get("transcript", "").strip()
+        confidence = res.get("confidence", 0.0)
+
+        if transcript and app.orchestrator is not None:
+            if app.orchestrator.dialogue.is_hover_stop_command(transcript):
+                app.orchestrator.emergency_hover()
+                app.orchestrator.narrator.emit_event(
+                    "EMERGENCY_HOVER",
+                    f"Audio Emergency Halt: \"{transcript}\"",
+                    {"transcript": transcript, "confidence": confidence},
+                    spoken_text="Emergency hover engaged. Holding position."
+                )
+                return jsonify({
+                    "status": "emergency_hover",
+                    "action": "HOVER",
+                    "transcript": transcript,
+                    "confidence": confidence,
+                    "latency_ms": res.get("latency_ms", 0.0)
+                })
+
+            app.orchestrator.queue_command(transcript)
+            app.orchestrator.narrator.emit_event(
+                "VOICE_COMMAND",
+                f"Audio Operator ({confidence * 100:.0f}%): \"{transcript}\"",
+                {"transcript": transcript, "confidence": confidence},
+                spoken_text=f"Acknowledged: {transcript}"
+            )
+
+        return jsonify({
+            "status": "processed",
+            "transcript": transcript,
+            "confidence": confidence,
+            "latency_ms": res.get("latency_ms", 0.0)
+        })
+
+    @app.route("/api/voice/status")
+    def voice_status():
+        """Retrieve voice subsystem capabilities and status."""
+        transcriber = getattr(app, "voice_transcriber", None)
+        is_mock = transcriber.mock if transcriber else True
+        return jsonify({
+            "enabled": True,
+            "engine": "mock" if is_mock else "gemini_multimodal",
+            "ptt_supported": True,
+            "speech_synthesis_supported": True
+        })
 
     @app.route("/api/start", methods=["POST"])
     def start_mission():

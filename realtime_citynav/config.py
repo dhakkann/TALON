@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional, Dict, Any
 
 
 def _get_default_airsim_ip() -> str:
@@ -108,6 +108,20 @@ class DashboardConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """Voice commands and speech feedback settings."""
+    enabled: bool = True
+    push_to_talk: bool = True
+    auto_tts_feedback: bool = True
+    tts_volume: float = 1.0
+    emergency_fastpath: bool = True
+    vad_energy_threshold: float = 500.0
+    mic_device_index: Optional[int] = None
+    mic_sample_rate: int = 16000
+    model_name: str = "gemini-3.5-flash"
+
+
+@dataclass
 class SystemConfig:
     """Master configuration encompassing all sub-configs."""
     airsim: AirSimConfig = field(default_factory=AirSimConfig)
@@ -116,6 +130,7 @@ class SystemConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     cognitive: CognitiveConfig = field(default_factory=CognitiveConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     
     # Fallback and simulation modes
     mock_airsim: bool = False

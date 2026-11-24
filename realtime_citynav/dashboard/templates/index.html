@@ -78,6 +78,11 @@
         <span class="text-slate-400">SIMULATION:</span>
         <span id="badge-sim" class="text-amber-400 font-bold">AIRSIM / MOCK</span>
       </div>
+      <!-- Spoken Audio Feedback Toggle -->
+      <button id="btn-audio-tts" onclick="toggleAudioFeedback()" title="Toggle spoken rationale audio feedback" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700 hover:text-white transition font-mono">
+        <span id="icon-audio">🔊</span>
+        <span id="label-audio">AUDIO ON</span>
+      </button>
     </div>
   </header>
 
@@ -241,11 +246,29 @@
           </button>
         </div>
 
-        <!-- Chat Input Form -->
+        <!-- Live Waveform Visualizer & Transcript HUD -->
+        <div id="voice-hud-container" class="hidden flex flex-col space-y-1 pt-1">
+          <div id="voice-hud" class="text-xs mono text-cyan-300 bg-cyan-950/80 border border-cyan-800 rounded px-2.5 py-1 flex items-center justify-between">
+            <span class="flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-red-500 animate-ping"></span>
+              <span id="voice-hud-text">Listening for flight commands...</span>
+            </span>
+            <span class="text-[10px] text-cyan-400 font-mono">PTT (SPACE)</span>
+          </div>
+          <canvas id="audio-waveform" width="320" height="20" class="rounded bg-black/60 border border-cyan-900/60 w-full"></canvas>
+        </div>
+
+        <!-- Chat & Voice Input Form -->
         <div class="flex items-center space-x-2 pt-1">
-          <input id="input-chat" type="text" placeholder="Type correction (e.g. 'no, go to the car') or query..." 
+          <input id="input-chat" type="text" placeholder="Type correction (e.g. 'no, go to the car') or use Voice..." 
                  onkeydown="if(event.key==='Enter') sendChat()"
                  class="flex-1 bg-[#090d18] border border-drone-border rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-drone-cyan" />
+          <button id="btn-mic" onclick="toggleVoiceRecording()" 
+                  title="Click to toggle continuous listening, or hold Spacebar for Push-to-Talk"
+                  class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 font-bold text-xs uppercase rounded transition flex items-center gap-1.5">
+            <svg id="mic-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 02-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+            <span id="mic-label">VOICE</span>
+          </button>
           <button onclick="sendChat()" class="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold text-xs uppercase rounded transition">
             Send
           </button>
@@ -462,6 +485,12 @@
       if (!narrations || narrations.length === 0) return;
       log.innerHTML = "";
       narrations.forEach(n => {
+        // Spoken audio feedback for critical events
+        if (audioFeedbackEnabled && n.spoken_text && !spokenEventTimestamps.has(n.timestamp)) {
+          spokenEventTimestamps.add(n.timestamp);
+          speakText(n.spoken_text);
+        }
+
         const row = document.createElement("div");
         row.className = "p-1.5 rounded bg-[#090d18] border border-slate-800/60 flex flex-col space-y-0.5";
         
@@ -470,6 +499,8 @@
         else if (n.event_type === "WAYPOINT_REACHED") badgeColor = "bg-emerald-950 text-emerald-400 border border-emerald-800";
         else if (n.event_type === "OBSTACLE_AVOIDANCE") badgeColor = "bg-rose-950 text-rose-400 border border-rose-800";
         else if (n.event_type === "OPERATOR_INPUT" || n.event_type === "INTERRUPTION_HANDLED") badgeColor = "bg-amber-950 text-amber-300 border border-amber-800";
+        else if (n.event_type === "VOICE_COMMAND") badgeColor = "bg-cyan-900 text-cyan-200 border border-cyan-600 font-bold";
+        else if (n.event_type === "EMERGENCY_HOVER") badgeColor = "bg-rose-950 text-rose-300 border border-rose-600 font-bold animate-pulse";
         else if (n.event_type === "MISSION_COMPLETED") badgeColor = "bg-emerald-900 text-emerald-300 border border-emerald-700";
 
         const timeStr = n.timestamp ? new Date(n.timestamp * 1000).toLocaleTimeString() : "";
@@ -510,6 +541,273 @@
         `;
         tbody.appendChild(tr);
       });
+    }
+
+    // =========================================================================
+    // VOICE COMMANDS & AUDIO FEEDBACK SUBSYSTEM
+    // =========================================================================
+    let audioFeedbackEnabled = true;
+    let spokenEventTimestamps = new Set();
+    let isVoiceListening = false;
+    let isPushToTalk = false;
+    let recognition = null;
+    let audioContext = null;
+    let analyserNode = null;
+    let micStream = null;
+    let animFrameWaveform = null;
+
+    function toggleAudioFeedback() {
+      audioFeedbackEnabled = !audioFeedbackEnabled;
+      const btn = document.getElementById("btn-audio-tts");
+      const icon = document.getElementById("icon-audio");
+      const label = document.getElementById("label-audio");
+      if (audioFeedbackEnabled) {
+        if (icon) icon.innerText = "🔊";
+        if (label) label.innerText = "AUDIO ON";
+        if (btn) btn.className = "flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700 hover:text-white transition font-mono";
+      } else {
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        if (icon) icon.innerText = "🔇";
+        if (label) label.innerText = "MUTED";
+        if (btn) btn.className = "flex items-center gap-1.5 px-2.5 py-1 rounded bg-rose-950 text-rose-400 border border-rose-800 transition font-mono";
+      }
+    }
+
+    function speakText(text) {
+      if (!audioFeedbackEnabled || !window.speechSynthesis || !text) return;
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = 1.05;
+        u.pitch = 1.0;
+        const voices = window.speechSynthesis.getVoices();
+        const engVoice = voices.find(v => v.lang.startsWith("en") && (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("David")));
+        if (engVoice) u.voice = engVoice;
+        window.speechSynthesis.speak(u);
+      } catch (err) {
+        console.warn("Speech synthesis error:", err);
+      }
+    }
+
+    function initVoiceSystem() {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) {
+        console.warn("Web Speech API not supported in this browser. Please use Chrome or Edge.");
+        const btnMic = document.getElementById("btn-mic");
+        if (btnMic) {
+          btnMic.title = "Web Speech API not supported in this browser. Type commands below.";
+          btnMic.classList.add("opacity-50", "cursor-not-allowed");
+        }
+        return;
+      }
+
+      recognition = new SpeechRec();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onstart = function() {
+        isVoiceListening = true;
+        updateMicUI(true);
+        startWaveformVisualizer();
+      };
+
+      recognition.onresult = function(event) {
+        let interimTranscript = "";
+        let finalTranscript = "";
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const res = event.results[i];
+          const text = res[0].transcript;
+          if (res.isFinal) {
+            finalTranscript += text;
+          } else {
+            interimTranscript += text;
+          }
+        }
+
+        const activeText = (finalTranscript || interimTranscript).trim().toLowerCase();
+
+        // 1. Instant Client-Side Emergency Fast-Path (<20ms)
+        if (/\b(stop|hover|halt|pause|wait|land)\b/i.test(activeText) && !/\b(building|fountain|tower|hospital)\b/i.test(activeText)) {
+          const hud = document.getElementById("voice-hud-text");
+          if (hud) hud.innerHTML = "<span class='text-rose-400 font-bold'>⚠️ EMERGENCY HALT TRIGGERED</span>";
+          emergencyHover();
+        } else if (interimTranscript) {
+          const hud = document.getElementById("voice-hud-text");
+          if (hud) hud.innerText = `🎙️ "${interimTranscript}"`;
+        }
+
+        if (finalTranscript.trim()) {
+          const clean = finalTranscript.trim();
+          const hud = document.getElementById("voice-hud-text");
+          if (hud) hud.innerText = `✓ Command: "${clean}"`;
+
+          // Post to server voice command endpoint
+          fetch("/api/voice_command", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              transcript: clean,
+              confidence: 0.95,
+              is_final: true
+            })
+          });
+
+          // Also populate chat input briefly for operator confirmation
+          const input = document.getElementById("input-chat");
+          if (input) {
+            input.value = clean;
+            setTimeout(() => { if (input.value === clean) input.value = ""; }, 2500);
+          }
+        }
+      };
+
+      recognition.onerror = function(event) {
+        console.warn("Speech recognition notice:", event.error);
+        if (event.error !== "no-speech") {
+          const hud = document.getElementById("voice-hud-text");
+          if (hud) hud.innerText = `Notice: ${event.error}`;
+        }
+      };
+
+      recognition.onend = function() {
+        if (isVoiceListening) {
+          try { recognition.start(); } catch (e) {}
+        } else {
+          updateMicUI(false);
+          stopWaveformVisualizer();
+        }
+      };
+
+      // Push-to-Talk (Spacebar) Keyboard Listener
+      window.addEventListener("keydown", e => {
+        if (e.code === "Space" && !e.repeat) {
+          const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+          if (activeTag !== "input" && activeTag !== "textarea") {
+            e.preventDefault();
+            if (!isVoiceListening) {
+              isPushToTalk = true;
+              startVoiceCapture();
+            }
+          }
+        }
+      });
+
+      window.addEventListener("keyup", e => {
+        if (e.code === "Space" && isPushToTalk) {
+          const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+          if (activeTag !== "input" && activeTag !== "textarea") {
+            e.preventDefault();
+            isPushToTalk = false;
+            stopVoiceCapture();
+          }
+        }
+      });
+    }
+
+    function startVoiceCapture() {
+      if (!recognition) return;
+      isVoiceListening = true;
+      try { recognition.start(); } catch (e) {}
+      updateMicUI(true);
+    }
+
+    function stopVoiceCapture() {
+      if (!recognition) return;
+      isVoiceListening = false;
+      try { recognition.stop(); } catch (e) {}
+      updateMicUI(false);
+      stopWaveformVisualizer();
+    }
+
+    function toggleVoiceRecording() {
+      if (isVoiceListening) {
+        stopVoiceCapture();
+      } else {
+        startVoiceCapture();
+      }
+    }
+
+    function updateMicUI(listening) {
+      const btn = document.getElementById("btn-mic");
+      const label = document.getElementById("mic-label");
+      const hudContainer = document.getElementById("voice-hud-container");
+      const hudText = document.getElementById("voice-hud-text");
+
+      if (listening) {
+        if (btn) btn.className = "px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs uppercase rounded transition flex items-center gap-1.5 glow-box-rose animate-pulse";
+        if (label) label.innerText = isPushToTalk ? "PTT ACTIVE" : "ON AIR";
+        if (hudContainer) hudContainer.classList.remove("hidden");
+        if (hudText) hudText.innerText = isPushToTalk ? "Hold Spacebar and speak command..." : "Listening continuously...";
+      } else {
+        if (btn) btn.className = "px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 font-bold text-xs uppercase rounded transition flex items-center gap-1.5";
+        if (label) label.innerText = "VOICE";
+        if (hudContainer) hudContainer.classList.add("hidden");
+      }
+    }
+
+    async function startWaveformVisualizer() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+        if (!audioContext) {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+        if (!micStream) {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        }
+        const source = audioContext.createMediaStreamSource(micStream);
+        analyserNode = audioContext.createAnalyser();
+        analyserNode.fftSize = 128;
+        source.connect(analyserNode);
+
+        const canvas = document.getElementById("audio-waveform");
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        const bufferLength = analyserNode.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        function drawWave() {
+          if (!isVoiceListening) return;
+          animFrameWaveform = requestAnimationFrame(drawWave);
+          analyserNode.getByteTimeDomainData(dataArray);
+
+          ctx.fillStyle = "rgba(7, 11, 20, 0.7)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "#00f0ff";
+          ctx.beginPath();
+
+          const sliceWidth = canvas.width / bufferLength;
+          let x = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = (v * canvas.height) / 2.0;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+            x += sliceWidth;
+          }
+          ctx.lineTo(canvas.width, canvas.height / 2.0);
+          ctx.stroke();
+        }
+        drawWave();
+      } catch (err) {
+        console.warn("Waveform visualizer setup notice:", err);
+      }
+    }
+
+    function stopWaveformVisualizer() {
+      if (animFrameWaveform) {
+        cancelAnimationFrame(animFrameWaveform);
+        animFrameWaveform = null;
+      }
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+      }
     }
 
     // Operator Chat Commands
@@ -986,6 +1284,7 @@
     window.addEventListener("DOMContentLoaded", () => {
       setupSSE();
       init3DEngine();
+      initVoiceSystem();
     });
   </script>
 </body>

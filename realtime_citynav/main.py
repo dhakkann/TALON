@@ -105,6 +105,7 @@ class CityNavOrchestrator:
         self._camera_client = None
         self._last_airsim_rgb: Optional[np.ndarray] = None
         self._last_airsim_depth: Optional[np.ndarray] = None
+        self._last_airsim_seg: Optional[np.ndarray] = None
         if not self.config.mock_airsim and _AIRSIM_AVAILABLE:
             try:
                 self._camera_client = airsim.MultirotorClient(
@@ -114,6 +115,9 @@ class CityNavOrchestrator:
                 )
                 self._camera_client.confirmConnection()
                 print(f"[Orchestrator] Dedicated AirSim camera client connected to {self.config.airsim.ip}:{self.config.airsim.port}")
+                if getattr(self.perception, "engine", "") == "segmentation":
+                    from realtime_citynav.perception import setup_airsim_segmentation
+                    setup_airsim_segmentation(self._camera_client)
             except Exception as e:
                 print(f"[Orchestrator] AirSim camera client connection warning: {e}")
                 self._camera_client = None
@@ -597,8 +601,9 @@ class CityNavOrchestrator:
             rgb, depth = self._acquire_frames()
             pose = self.flight.get_pose()
 
-            # Run YOLO-World detection and sub-millisecond 3D projection
-            detections = self.perception.detect_and_project(rgb, depth, pose)
+            # Run multi-engine detection (feed segmentation mask if engine is segmentation)
+            det_input = self._last_airsim_seg if (getattr(self.perception, "engine", "") == "segmentation" and self._last_airsim_seg is not None) else rgb
+            detections = self.perception.detect_and_project(det_input, depth, pose)
 
             # Update 3D persistent spatial memory
             if detections:
@@ -855,10 +860,14 @@ class CityNavOrchestrator:
         cam_client = self._camera_client or (self.flight.client if not self.flight.mock else None)
         if cam_client is not None and _AIRSIM_AVAILABLE and not self.config.mock_airsim:
             try:
-                responses = cam_client.simGetImages([
+                requests = [
                     airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.Scene, False, False),
                     airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.DepthPlanar, True, False)
-                ], vehicle_name=self.flight.vehicle_name)
+                ]
+                if getattr(self.perception, "engine", "") == "segmentation":
+                    requests.append(airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.Segmentation, False, False))
+
+                responses = cam_client.simGetImages(requests, vehicle_name=self.flight.vehicle_name)
                 if len(responses) >= 2 and len(responses[0].image_data_uint8) > 0:
                     img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
                     resp_w = responses[0].width
@@ -874,6 +883,19 @@ class CityNavOrchestrator:
                         responses[1].image_data_float, responses[1].width, responses[1].height
                     )
                     depth_arr = np.array(depth, dtype=np.float32)
+
+                    if len(responses) >= 3 and len(responses[2].image_data_uint8) > 0:
+                        seg1d = np.frombuffer(responses[2].image_data_uint8, dtype=np.uint8)
+                        if seg1d.size == resp_h * resp_w * 3:
+                            seg = seg1d.reshape(resp_h, resp_w, 3)
+                        elif seg1d.size == resp_h * resp_w * 4:
+                            seg = seg1d.reshape(resp_h, resp_w, 4)[:, :, :3]
+                        else:
+                            seg = None
+                        if seg is not None and (resp_w != w or resp_h != h):
+                            seg = cv2.resize(seg, (w, h), interpolation=cv2.INTER_NEAREST)
+                        self._last_airsim_seg = seg
+
                     if rgb is not None and depth_arr is not None:
                         # Resize to standard config resolution if AirSim returned different aspect/size
                         if resp_w != w or resp_h != h:

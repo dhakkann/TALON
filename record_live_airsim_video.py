@@ -150,6 +150,12 @@ def main():
 
             responses = client.simGetImages(reqs)
             if not responses or len(responses[0].image_data_uint8) == 0:
+                fallback_reqs = [airsim.ImageRequest("0", airsim.ImageType.Scene, False, False)]
+                if args.segmentation:
+                    fallback_reqs.append(airsim.ImageRequest("0", airsim.ImageType.Segmentation, False, False))
+                responses = client.simGetImages(fallback_reqs)
+
+            if not responses or len(responses[0].image_data_uint8) == 0:
                 time.sleep(0.01)
                 continue
 
@@ -193,10 +199,17 @@ def main():
 
             # Query vehicle telemetry
             state = client.getMultirotorState()
-            pos = state.kinematics_estimated.position_val
-            vel = state.kinematics_estimated.linear_velocity_val
-            spd = float(np.sqrt(vel.x_val**2 + vel.y_val**2 + vel.z_val**2))
-            alt = float(-pos.z_val)
+            kin = state.kinematics_estimated
+            pos = getattr(kin, "position", getattr(kin, "position_val", None))
+            vel = getattr(kin, "linear_velocity", getattr(kin, "linear_velocity_val", None))
+            vx = getattr(vel, "x_val", 0.0)
+            vy = getattr(vel, "y_val", 0.0)
+            vz = getattr(vel, "z_val", 0.0)
+            px = getattr(pos, "x_val", 0.0)
+            py = getattr(pos, "y_val", 0.0)
+            pz = getattr(pos, "z_val", 0.0)
+            spd = float(np.sqrt(vx**2 + vy**2 + vz**2))
+            alt = float(-pz)
 
             # Draw HUD Overlay Banner
             cv2.rectangle(frame, (0, 0), (width, 42), (10, 15, 26), -1)
@@ -206,7 +219,7 @@ def main():
             cv2.putText(frame, f"TIME: {elapsed:.1f}s", (260, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (220, 220, 220), 1, cv2.LINE_AA)
             cv2.putText(frame, f"ALT: {alt:.1f} m", (410, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 128), 1, cv2.LINE_AA)
             cv2.putText(frame, f"SPEED: {spd:.1f} m/s", (550, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, f"POS: [{pos.x_val:.1f}, {pos.y_val:.1f}]", (730, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (180, 200, 220), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"POS: [{px:.1f}, {py:.1f}]", (730, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (180, 200, 220), 1, cv2.LINE_AA)
 
             engine_label = "UNREAL GROUND-TRUTH SEGMENTATION" if args.segmentation else "ONBOARD AIRSIM SENSORS"
             cv2.putText(frame, f"ENGINE: {engine_label}", (980, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 180, 0), 1, cv2.LINE_AA)

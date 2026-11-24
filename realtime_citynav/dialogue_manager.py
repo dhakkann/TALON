@@ -74,8 +74,6 @@ class DialogueManager:
         self.command_queue: queue.Queue[str] = queue.Queue()
         self.client = None
         self.known_landmarks: List[str] = list(known_landmarks) if known_landmarks else list(self.KNOWN_DEFAULT_LANDMARKS)
-        if known_landmarks:
-            type(self).KNOWN_DEFAULT_LANDMARKS = list(known_landmarks)
         self.landmark_centers: Dict[str, np.ndarray] = {
             k: (np.array(v, dtype=float) if not isinstance(v, np.ndarray) else v)
             for k, v in (landmark_centers.items() if landmark_centers else self.KNOWN_LANDMARK_CENTERS.items())

@@ -154,8 +154,6 @@ class EnvironmentConfig:
         "blue building": [75.0, -14.0, 0.0],
         "tower": [130.0, -10.0, 0.0],
         "hospital": [60.0, -30.0, 0.0],
-        "bridge": [85.0, -25.0, 0.0],
-        "warehouse": [100.0, 40.0, 0.0],
     })
 
 
@@ -254,8 +252,6 @@ def apply_environment_preset(cfg: SystemConfig, env_name: str, perception_engine
             "blue building": [75.0, -14.0, 0.0],
             "tower": [130.0, -10.0, 0.0],
             "hospital": [60.0, -30.0, 0.0],
-            "bridge": [85.0, -25.0, 0.0],
-            "warehouse": [100.0, 40.0, 0.0],
         }
 
     return cfg

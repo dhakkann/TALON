@@ -51,3 +51,13 @@ CityNavAgent.code/
 Thumbs.db
 *.tmp
 scratch/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz

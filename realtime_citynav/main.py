@@ -15,7 +15,7 @@ import cv2
 # Add parent directory to path for clean package imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from realtime_citynav.config import SystemConfig, DEFAULT_CONFIG
+from realtime_citynav.config import SystemConfig, apply_environment_preset, DEFAULT_CONFIG
 from realtime_citynav.flight_controller import RealtimeFlightController
 from realtime_citynav.perception import RealtimePerception
 from realtime_citynav.spatial_memory import SpatialMemory
@@ -69,6 +69,8 @@ class CityNavOrchestrator:
         )
         self.perception = RealtimePerception(
             model_path=self.config.perception.model_name,
+            engine=self.config.env.perception_engine,
+            environment=self.config.env.name,
             fov_degrees=self.config.airsim.fov_degrees,
             width=self.config.airsim.image_width,
             height=self.config.airsim.image_height,
@@ -80,8 +82,8 @@ class CityNavOrchestrator:
             mock=self.config.mock_perception
         )
         
-        # Prime detection vocabulary with default classes
-        self.perception.update_target_vocabulary(self.config.perception.default_classes)
+        # Prime detection vocabulary with environment default classes
+        self.perception.update_target_vocabulary(self.config.env.default_classes)
 
         # Mission navigation state
         self.subgoals: List[str] = []
@@ -331,6 +333,11 @@ class CityNavOrchestrator:
         for lm_name, lm_pos in getattr(self.dialogue, "landmark_centers", {}).items():
             if lm_name in base_name.lower() or base_name.lower() in lm_name:
                 return lm_pos
+
+        # Check active environment configured landmarks first
+        for lm_name, lm_pos in getattr(self.config.env, "default_landmarks", {}).items():
+            if lm_name in base_name.lower() or base_name.lower() in lm_name:
+                return np.asarray(lm_pos, dtype=float)
 
         mock_world = {
             "fountain": np.array([32.0, 0.0, 0.0]),
@@ -1058,6 +1065,8 @@ class CityNavOrchestrator:
             "orbit_facing": orbit_telem["orbit_facing"],
             "revolution_count": orbit_telem["revolution_count"],
             "is_following_path": orbit_telem["is_following_path"],
+            "environment": getattr(self.config.env, "name", "city") if hasattr(self.config, "env") else "city",
+            "perception_engine": getattr(self.perception, "engine", "auto"),
         }
 
     def start(self, start_dashboard: Optional[bool] = None, start_voice_mic: bool = False) -> None:
@@ -1135,6 +1144,8 @@ def main():
     parser = argparse.ArgumentParser(description="Real-Time Autonomous CityNav Drone System")
     parser.add_argument("--airsim-ip", "--ip", dest="airsim_ip", type=str, default="", help="AirSim host IP address")
     parser.add_argument("--airsim-port", dest="airsim_port", type=int, default=0, help="AirSim RPC port")
+    parser.add_argument("--env", "--environment", dest="environment", type=str, default="city", choices=["city", "neighborhood", "nh", "blocks", "geometric"], help="Simulation environment preset (city, neighborhood/nh, blocks)")
+    parser.add_argument("--engine", "--perception", dest="perception_engine", type=str, default="auto", choices=["auto", "coco", "color", "segmentation", "yolo_world"], help="Perception engine backend")
     parser.add_argument("--vehicle-name", dest="vehicle_name", type=str, default="", help="AirSim vehicle name")
     parser.add_argument("--mock", action="store_true", help="Force kinematic simulation mock mode")
     parser.add_argument("--speed", type=float, default=4.0, help="Cruise speed in m/s")
@@ -1146,6 +1157,7 @@ def main():
     args = parser.parse_args()
 
     cfg = SystemConfig()
+    cfg = apply_environment_preset(cfg, args.environment, args.perception_engine)
     if args.airsim_ip:
         cfg.airsim.ip = args.airsim_ip
     if args.airsim_port:

@@ -122,8 +122,32 @@ class VoiceConfig:
 
 
 @dataclass
+class EnvironmentConfig:
+    """Simulation environment profile and presets."""
+    name: str = "city"  # "city", "neighborhood", "blocks"
+    description: str = "AirSim CityEnviron dense urban canyon"
+    takeoff_altitude: float = 12.0
+    cruise_speed: float = 4.0
+    obstacle_distance_threshold: float = 4.0
+    perception_engine: str = "auto"  # "auto", "coco", "color", "segmentation", "yolo_world"
+    default_classes: List[str] = field(default_factory=lambda: [
+        "building", "car", "tree", "traffic light", "fountain", "tower", "bridge"
+    ])
+    default_landmarks: Dict[str, List[float]] = field(default_factory=lambda: {
+        "fountain": [32.0, 0.0, 0.0],
+        "red building": [75.0, 12.0, 0.0],
+        "blue building": [75.0, -14.0, 0.0],
+        "tower": [130.0, -10.0, 0.0],
+        "hospital": [60.0, -30.0, 0.0],
+        "bridge": [85.0, -25.0, 0.0],
+        "warehouse": [100.0, 40.0, 0.0],
+    })
+
+
+@dataclass
 class SystemConfig:
     """Master configuration encompassing all sub-configs."""
+    env: EnvironmentConfig = field(default_factory=EnvironmentConfig)
     airsim: AirSimConfig = field(default_factory=AirSimConfig)
     flight: FlightConfig = field(default_factory=FlightConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
@@ -136,6 +160,90 @@ class SystemConfig:
     mock_airsim: bool = False
     mock_perception: bool = False
     mock_gemini: bool = False
+
+
+def apply_environment_preset(cfg: SystemConfig, env_name: str, perception_engine: str = "auto") -> SystemConfig:
+    """Apply customized environment and perception profile to SystemConfig."""
+    normalized = env_name.lower().strip()
+    engine = perception_engine.lower().strip()
+
+    if normalized in ("neighborhood", "nh", "suburb", "airsimnh"):
+        cfg.env.name = "neighborhood"
+        cfg.env.description = "AirSim Neighborhood suburban residential map"
+        cfg.flight.takeoff_altitude = 8.0
+        cfg.env.takeoff_altitude = 8.0
+        cfg.flight.cruise_speed = 3.5
+        cfg.env.cruise_speed = 3.5
+        cfg.flight.obstacle_distance_threshold = 3.0
+        cfg.env.obstacle_distance_threshold = 3.0
+        effective_engine = "coco" if engine in ("auto", "") else engine
+        cfg.env.perception_engine = effective_engine
+        cfg.perception.model_name = "yolov8n.pt"
+        cfg.perception.default_classes = [
+            "car", "truck", "bus", "stop sign", "traffic light", "bench", "tree", "house"
+        ]
+        cfg.env.default_classes = cfg.perception.default_classes
+        cfg.env.default_landmarks = {
+            "white car": [25.0, 8.0, 0.0],
+            "stop sign": [40.0, 0.0, 0.0],
+            "red car": [55.0, -12.0, 0.0],
+            "house": [50.0, 15.0, 0.0],
+            "tree": [30.0, -20.0, 0.0],
+            "bench": [20.0, -5.0, 0.0],
+        }
+
+    elif normalized in ("blocks", "block", "geometric"):
+        cfg.env.name = "blocks"
+        cfg.env.description = "AirSim Blocks geometric benchmark arena"
+        cfg.flight.takeoff_altitude = 5.0
+        cfg.env.takeoff_altitude = 5.0
+        cfg.flight.cruise_speed = 3.0
+        cfg.env.cruise_speed = 3.0
+        cfg.flight.obstacle_distance_threshold = 2.5
+        cfg.env.obstacle_distance_threshold = 2.5
+        effective_engine = "color" if engine in ("auto", "") else engine
+        cfg.env.perception_engine = effective_engine
+        cfg.perception.model_name = "yolov8n.pt"
+        cfg.perception.default_classes = [
+            "orange block", "blue cylinder", "green cube", "red pillar", "yellow pyramid", "cylinder", "block"
+        ]
+        cfg.env.default_classes = cfg.perception.default_classes
+        cfg.env.default_landmarks = {
+            "orange block": [25.0, 5.0, 0.0],
+            "blue cylinder": [45.0, -10.0, 0.0],
+            "red pillar": [60.0, 15.0, 0.0],
+            "green cube": [35.0, -20.0, 0.0],
+            "yellow pyramid": [50.0, 0.0, 0.0],
+        }
+
+    else:
+        # Default CityEnviron
+        cfg.env.name = "city"
+        cfg.env.description = "AirSim CityEnviron dense urban canyon"
+        cfg.flight.takeoff_altitude = 12.0
+        cfg.env.takeoff_altitude = 12.0
+        cfg.flight.cruise_speed = 4.0
+        cfg.env.cruise_speed = 4.0
+        cfg.flight.obstacle_distance_threshold = 4.0
+        cfg.env.obstacle_distance_threshold = 4.0
+        effective_engine = "yolo_world" if engine in ("auto", "") else engine
+        cfg.env.perception_engine = effective_engine
+        cfg.perception.model_name = "yolov8s-worldv2.pt" if effective_engine == "yolo_world" else "yolov8n.pt"
+        cfg.perception.default_classes = [
+            "building", "car", "tree", "traffic light", "fountain", "tower", "bridge"
+        ]
+        cfg.env.default_classes = cfg.perception.default_classes
+        cfg.env.default_landmarks = {
+            "fountain": [32.0, 0.0, 0.0],
+            "red building": [75.0, 12.0, 0.0],
+            "blue building": [75.0, -14.0, 0.0],
+            "tower": [130.0, -10.0, 0.0],
+            "hospital": [60.0, -30.0, 0.0],
+            "bridge": [85.0, -25.0, 0.0],
+            "warehouse": [100.0, 40.0, 0.0],
+        }
+
+    return cfg
 
 
 # Default system configuration instance

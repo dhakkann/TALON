@@ -78,6 +78,14 @@
         <span class="text-slate-400">SIMULATION:</span>
         <span id="badge-sim" class="text-amber-400 font-bold">AIRSIM / MOCK</span>
       </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">ENV:</span>
+        <span id="badge-env" class="px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800 font-bold">CITY</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-slate-400">ENGINE:</span>
+        <span id="badge-engine" class="px-2 py-0.5 rounded bg-purple-950 text-purple-400 border border-purple-800 font-bold">COCO</span>
+      </div>
       <!-- Spoken Audio Feedback Toggle -->
       <button id="btn-audio-tts" onclick="toggleAudioFeedback()" title="Toggle spoken rationale audio feedback" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700 hover:text-white transition font-mono">
         <span id="icon-audio">🔊</span>
@@ -387,6 +395,14 @@
           bSim.innerText = tel.is_mock ? "KINEMATIC MOCK" : "AIRSIM CONNECTED";
           bSim.className = tel.is_mock ? "text-amber-400 font-bold" : "text-emerald-400 font-bold";
         }
+      }
+      if (tel.environment) {
+        const bEnv = document.getElementById("badge-env");
+        if (bEnv) bEnv.innerText = tel.environment.toUpperCase();
+      }
+      if (tel.perception_engine) {
+        const bEng = document.getElementById("badge-engine");
+        if (bEng) bEng.innerText = tel.perception_engine.toUpperCase();
       }
 
       // HUD

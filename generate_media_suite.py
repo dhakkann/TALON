@@ -781,6 +781,12 @@ def generate_demo_video(output_path=os.path.join(OUTPUT_DIR, "citynav_demo_fligh
 
     # Write intermediate video for lossless ffmpeg H.264 transcoding
     ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        try:
+            import imageio_ffmpeg
+            ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg_bin = None
     raw_path = output_path.replace(".mp4", "_raw.mp4") if ffmpeg_bin else output_path
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -1043,9 +1049,11 @@ def generate_demo_video(output_path=os.path.join(OUTPUT_DIR, "citynav_demo_fligh
         try:
             cmd = [
                 ffmpeg_bin, "-y", "-i", raw_path,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.0",
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                "-pix_fmt", "yuv420p", "-profile:v", "main", "-level", "3.1",
                 "-movflags", "+faststart",
+                "-c:a", "aac", "-b:a", "128k", "-shortest",
                 output_path
             ]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

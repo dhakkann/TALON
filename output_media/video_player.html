@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AR511 TALON - Demonstration Videos</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      margin: 0;
+      padding: 30px;
+    }
+    h1 {
+      color: #38bdf8;
+      margin-bottom: 8px;
+    }
+    p.subtitle {
+      color: #94a3b8;
+      margin-top: 0;
+      margin-bottom: 25px;
+    }
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+      gap: 25px;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
+    .card h2 {
+      margin-top: 0;
+      font-size: 1.15rem;
+      color: #38bdf8;
+    }
+    .card p {
+      color: #cbd5e1;
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    video {
+      width: 100%;
+      border-radius: 8px;
+      background: #000;
+      border: 1px solid #475569;
+    }
+    .tag {
+      display: inline-block;
+      background: #0369a1;
+      color: #e0f2fe;
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .tag.green {
+      background: #047857;
+      color: #d1fae5;
+    }
+    .tag.purple {
+      background: #6d28d9;
+      color: #ede9fe;
+    }
+  </style>
+</head>
+<body>
+  <h1>AR511 TALON Flight Demonstration Suite</h1>
+  <p class="subtitle">Universal H.264 (AVC1) + AAC Audio Demonstration Media for Presentation & Verification</p>
+
+  <div class="video-grid">
+    <!-- Video 1 -->
+    <div class="card">
+      <span class="tag">SYNTHETIC MULTI-VIEW</span>
+      <h2>1. Tactical Cockpit & Radar Simulation (40s)</h2>
+      <p>Features simultaneous 4-quadrant live telemetry: FPV Camera with YOLO detections, 3D Tactical Radar with potential repulsion field, Navigation Telemetry dials, and Gemini natural language dialogue waveform.</p>
+      <video controls preload="metadata" poster="video_frame_05s.png">
+        <source src="citynav_demo_flight.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+      </video>
+    </div>
+
+    <!-- Video 2 -->
+    <div class="card">
+      <span class="tag green">AIRSIM LIVE RUNTIME</span>
+      <h2>2. Live AirSim Autonomous Flight Showcase</h2>
+      <p>Recorded live from Microsoft AirSim on this machine. Features full-flight telemetry HUD banner displaying real-time Altitude, Speed, NED Coordinates, Mission Elapsed Time, and targeting crosshairs.</p>
+      <video controls preload="metadata" poster="inspect_showcase_05s.png">
+        <source src="live_airsim_showcase.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+      </video>
+    </div>
+
+    <!-- Video 3 -->
+    <div class="card">
+      <span class="tag purple">UNREAL SEMANTIC SEGMENTATION</span>
+      <h2>3. Unreal Engine Ground-Truth Segmentation Showcase</h2>
+      <p>Demonstrates automatic actor ID mapping in Unreal Engine. AirSim queries object meshes and projects verified ground-truth bounding boxes and class tags with telemetry overlays.</p>
+      <video controls preload="metadata" poster="inspect_seg_10s.png">
+        <source src="live_segmentation_showcase.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+      </video>
+    </div>
+  </div>
+</body>
+</html>

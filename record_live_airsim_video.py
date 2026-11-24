@@ -247,15 +247,24 @@ def main():
         print(f"[Recorder] Finished capturing {frame_count} frames.")
 
         # Re-encode to universal H.264 using ffmpeg if available
-        if os.system("ffmpeg -version >nul 2>&1") == 0:
-            print(f"[Recorder] Transcoding with ffmpeg to high-quality H.264 '{args.out}'...")
-            cmd = f'ffmpeg -y -i "{temp_out}" -c:v libx264 -preset fast -crf 22 -pix_fmt yuv420p -movflags +faststart "{args.out}" >nul 2>&1'
-            if os.system(cmd) == 0:
+        import shutil
+        ffmpeg_exe = shutil.which("ffmpeg")
+        if not ffmpeg_exe:
+            try:
+                import imageio_ffmpeg
+                ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                ffmpeg_exe = None
+
+        if ffmpeg_exe and os.path.exists(ffmpeg_exe):
+            print(f"[Recorder] Transcoding with ffmpeg to universal high-quality H.264 '{args.out}'...")
+            cmd = f'"{ffmpeg_exe}" -y -i "{temp_out}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -preset fast -crf 20 -profile:v main -level 3.1 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k -shortest "{args.out}"'
+            if os.system(cmd + " >nul 2>&1") == 0:
                 try:
                     os.remove(temp_out)
                 except Exception:
                     pass
-                print(f"[Success] Video saved to '{args.out}' (Universal H.264 AVC1)!")
+                print(f"[Success] Video saved to '{args.out}' (Universal H.264 AVC1 + AAC Audio)!")
                 return
 
         # Fallback if ffmpeg is not in PATH

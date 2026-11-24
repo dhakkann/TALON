@@ -26,6 +26,7 @@ wheels/
 .pytest_cache/
 
 # Environments
+.yolo/
 .env
 .venv
 env/

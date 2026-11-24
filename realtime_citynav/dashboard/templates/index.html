@@ -239,7 +239,7 @@
         </div>
 
         <!-- Quick Action Chips -->
-        <div class="flex flex-wrap gap-1.5 pt-1">
+        <div class="flex flex-wrap gap-1.5 pt-1" id="quick-chips-container">
           <button onclick="sendQuickChat('hover in circle around blue building')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 rounded transition font-bold">
             Orbit: Blue Building
           </button>
@@ -251,6 +251,9 @@
           </button>
           <button onclick="sendQuickChat('go back to the fountain')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-drone-emerald border border-slate-700 rounded transition">
             Return: Fountain
+          </button>
+          <button onclick="sendQuickChat('explore the city')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-purple-300 border border-slate-700 rounded transition font-bold">
+            Explore: City
           </button>
           <button onclick="sendQuickChat('what have you seen?')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded transition">
             Query: Memory
@@ -399,6 +402,7 @@
       if (tel.environment) {
         const bEnv = document.getElementById("badge-env");
         if (bEnv) bEnv.innerText = tel.environment.toUpperCase();
+        updateEnvironmentUI(tel.environment);
       }
       if (tel.perception_engine) {
         const bEng = document.getElementById("badge-engine");
@@ -870,13 +874,99 @@
 
     // --- 3D TACTICAL WORLD VIEW INTEGRATION ---
     let currentViewMode = 'cam'; // 'cam', '3d', 'split'
-    const LANDMARKS_3D = [
-      { id: 'fountain', name: 'Fountain Plaza', type: 'fountain', x: 32.0, y: 0.0, z: 0.0, radius: 4.5, height: 2.2, color: '#00d4ff' },
-      { id: 'red_building', name: 'Red Building', type: 'building', x: 75.0, y: 12.0, z: 0.0, w: 12.0, d: 12.0, h: 18.0, color: '#ef4444', roofColor: '#991b1b', labelColor: '#fca5a5' },
-      { id: 'blue_building', name: 'Blue Building', type: 'building', x: 75.0, y: -14.0, z: 0.0, w: 12.0, d: 12.0, h: 18.0, color: '#3b82f6', roofColor: '#1e40af', labelColor: '#93c5fd' },
-      { id: 'tower', name: 'Metropolitan Tower', type: 'building', x: 130.0, y: -10.0, z: 0.0, w: 8.0, d: 8.0, h: 32.0, color: '#a855f7', roofColor: '#6b21a8', labelColor: '#d8b4fe' },
-      { id: 'hospital', name: 'General Hospital', type: 'building', x: 60.0, y: -30.0, z: 0.0, w: 16.0, d: 16.0, h: 12.0, color: '#f8fafc', roofColor: '#cbd5e1', labelColor: '#ffffff', isHospital: true }
-    ];
+    let currentEnvironment = null;
+
+    const ENV_LANDMARKS_3D = {
+      city: [
+        { id: 'fountain', name: 'Fountain Plaza', type: 'fountain', x: 32.0, y: 0.0, z: 0.0, radius: 4.5, height: 2.2, color: '#00d4ff' },
+        { id: 'red_building', name: 'Red Building', type: 'building', x: 75.0, y: 12.0, z: 0.0, w: 12.0, d: 12.0, h: 18.0, color: '#ef4444', roofColor: '#991b1b', labelColor: '#fca5a5' },
+        { id: 'blue_building', name: 'Blue Building', type: 'building', x: 75.0, y: -14.0, z: 0.0, w: 12.0, d: 12.0, h: 18.0, color: '#3b82f6', roofColor: '#1e40af', labelColor: '#93c5fd' },
+        { id: 'tower', name: 'Metropolitan Tower', type: 'building', x: 130.0, y: -10.0, z: 0.0, w: 8.0, d: 8.0, h: 32.0, color: '#a855f7', roofColor: '#6b21a8', labelColor: '#d8b4fe' },
+        { id: 'hospital', name: 'General Hospital', type: 'building', x: 60.0, y: -30.0, z: 0.0, w: 16.0, d: 16.0, h: 12.0, color: '#f8fafc', roofColor: '#cbd5e1', labelColor: '#ffffff', isHospital: true }
+      ],
+      blocks: [
+        { id: 'orange_block', name: 'Orange Block', type: 'building', x: 25.0, y: 5.0, z: 0.0, w: 6.0, d: 6.0, h: 6.0, color: '#f97316', roofColor: '#c2410c', labelColor: '#fed7aa' },
+        { id: 'blue_cylinder', name: 'Blue Cylinder', type: 'cylinder', x: 45.0, y: -10.0, z: 0.0, radius: 3.5, height: 10.0, color: '#3b82f6', roofColor: '#1d4ed8', labelColor: '#bfdbfe' },
+        { id: 'red_pillar', name: 'Red Pillar', type: 'building', x: 60.0, y: 15.0, z: 0.0, w: 4.0, d: 4.0, h: 14.0, color: '#ef4444', roofColor: '#b91c1c', labelColor: '#fca5a5' },
+        { id: 'green_cube', name: 'Green Cube', type: 'building', x: 35.0, y: -20.0, z: 0.0, w: 8.0, d: 8.0, h: 8.0, color: '#22c55e', roofColor: '#15803d', labelColor: '#bbf7d0' },
+        { id: 'yellow_pyramid', name: 'Yellow Pyramid', type: 'pyramid', x: 50.0, y: 0.0, z: 0.0, w: 7.0, d: 7.0, h: 9.0, color: '#eab308', roofColor: '#a16207', labelColor: '#fef08a' }
+      ],
+      neighborhood: [
+        { id: 'white_car', name: 'White Car', type: 'building', x: 25.0, y: 8.0, z: 0.0, w: 4.5, d: 2.2, h: 1.8, color: '#f1f5f9', roofColor: '#94a3b8', labelColor: '#ffffff' },
+        { id: 'stop_sign', name: 'Stop Sign', type: 'building', x: 40.0, y: 0.0, z: 0.0, w: 1.0, d: 1.0, h: 3.2, color: '#ef4444', roofColor: '#b91c1c', labelColor: '#fca5a5' },
+        { id: 'red_car', name: 'Red Car', type: 'building', x: 55.0, y: -12.0, z: 0.0, w: 4.5, d: 2.2, h: 1.8, color: '#dc2626', roofColor: '#991b1b', labelColor: '#fca5a5' },
+        { id: 'house', name: 'Suburban House', type: 'building', x: 50.0, y: 15.0, z: 0.0, w: 14.0, d: 12.0, h: 8.0, color: '#d97706', roofColor: '#78350f', labelColor: '#fde68a' },
+        { id: 'tree', name: 'Neighborhood Tree', type: 'cylinder', x: 30.0, y: -20.0, z: 0.0, radius: 3.0, height: 7.0, color: '#16a34a', roofColor: '#14532d', labelColor: '#86efac' },
+        { id: 'bench', name: 'Park Bench', type: 'building', x: 20.0, y: -5.0, z: 0.0, w: 2.5, d: 1.2, h: 1.2, color: '#854d0e', roofColor: '#713f12', labelColor: '#fef08a' }
+      ]
+    };
+
+    let LANDMARKS_3D = [...ENV_LANDMARKS_3D.city];
+
+    function updateEnvironmentUI(envName) {
+      const raw = (envName || 'city').toLowerCase();
+      const env = (raw === 'blocks' || raw === 'block') ? 'blocks' : (raw === 'neighborhood' || raw === 'nh' || raw === 'suburb') ? 'neighborhood' : 'city';
+      if (env === currentEnvironment) return;
+      currentEnvironment = env;
+
+      // Update 3D world landmarks
+      if (ENV_LANDMARKS_3D[env]) {
+        LANDMARKS_3D = [...ENV_LANDMARKS_3D[env]];
+      }
+
+      // Update route input placeholder
+      const inputMission = document.getElementById("input-mission");
+      if (inputMission) {
+        if (env === 'blocks') {
+          inputMission.placeholder = "Enter route instruction (e.g. Fly to the orange block, then circle the blue cylinder, inspect red pillar)";
+        } else if (env === 'neighborhood') {
+          inputMission.placeholder = "Enter route instruction (e.g. Fly to the white car, then pass the stop sign, navigate to house)";
+        } else {
+          inputMission.placeholder = "Enter route instruction (e.g. Fly to the fountain, then pass red building, navigate to tower)";
+        }
+      }
+
+      // Update Quick Action Chips
+      const chipsContainer = document.getElementById("quick-chips-container");
+      if (chipsContainer) {
+        let chips = [];
+        if (env === 'blocks') {
+          chips = [
+            { text: 'Orbit: Blue Cylinder', cmd: 'hover in circle around blue cylinder', color: 'text-cyan-400 font-bold' },
+            { text: 'Circle 2x: Orange Block', cmd: 'circle twice facing forward around orange block', color: 'text-cyan-300' },
+            { text: 'Target: Red Pillar', cmd: 'no, the red pillar', color: 'text-drone-cyan' },
+            { text: 'Return: Orange Block', cmd: 'go back to the orange block', color: 'text-drone-emerald' },
+            { text: 'Explore: All Blocks', cmd: 'explore the arena', color: 'text-purple-300 font-bold' },
+            { text: 'Query: Memory', cmd: 'what have you seen?', color: 'text-amber-300' },
+            { text: 'Hover', cmd: 'stop and hover', color: 'text-rose-400' }
+          ];
+        } else if (env === 'neighborhood') {
+          chips = [
+            { text: 'Orbit: Red Car', cmd: 'hover in circle around red car', color: 'text-cyan-400 font-bold' },
+            { text: 'Circle: House', cmd: 'circle twice around the house', color: 'text-cyan-300' },
+            { text: 'Target: Stop Sign', cmd: 'no, the stop sign', color: 'text-drone-cyan' },
+            { text: 'Return: White Car', cmd: 'go back to the white car', color: 'text-drone-emerald' },
+            { text: 'Explore: Suburb', cmd: 'explore neighborhood', color: 'text-purple-300 font-bold' },
+            { text: 'Query: Memory', cmd: 'what have you seen?', color: 'text-amber-300' },
+            { text: 'Hover', cmd: 'stop and hover', color: 'text-rose-400' }
+          ];
+        } else {
+          chips = [
+            { text: 'Orbit: Blue Building', cmd: 'hover in circle around blue building', color: 'text-cyan-400 font-bold' },
+            { text: 'Circle 2x Tangent', cmd: 'circle twice facing forward around blue building', color: 'text-cyan-300' },
+            { text: 'Target: Blue Building', cmd: 'no, the blue building', color: 'text-drone-cyan' },
+            { text: 'Return: Fountain', cmd: 'go back to the fountain', color: 'text-drone-emerald' },
+            { text: 'Explore: City', cmd: 'explore the city', color: 'text-purple-300 font-bold' },
+            { text: 'Query: Memory', cmd: 'what have you seen?', color: 'text-amber-300' },
+            { text: 'Hover', cmd: 'stop and hover', color: 'text-rose-400' }
+          ];
+        }
+
+        chipsContainer.innerHTML = chips.map(c => 
+          `<button onclick="sendQuickChat('${c.cmd}')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 ${c.color} border border-slate-700 rounded transition">${c.text}</button>`
+        ).join('');
+      }
+    }
 
     let drone3D = {
       x: 0.0, y: 0.0, z: -5.0, yaw: 0.0, speed: 0.0,
@@ -1114,11 +1204,131 @@
                 ctx3D.beginPath(); ctx3D.arc(fc.x, fc.y, 10, 0, Math.PI * 2);
                 ctx3D.fillStyle = 'rgba(0, 212, 255, 0.65)'; ctx3D.fill();
                 ctx3D.font = '10px ui-monospace, monospace';
-                const txt = 'Fountain Plaza';
+                const txt = lm.name || 'Fountain Plaza';
                 ctx3D.fillStyle = '#67e8f9';
                 ctx3D.fillText(txt, ft.x - 30, ft.y - 6);
               }
             });
+          }
+        } else if (lm.type === 'cylinder') {
+          const segs = 12;
+          const r = lm.radius || 3.5;
+          const h = lm.height || 8.0;
+          const topZ = -h;
+          const ptsBase = [];
+          const ptsTop = [];
+          for (let i = 0; i < segs; i++) {
+            const a = (i / segs) * Math.PI * 2;
+            ptsBase.push(projectPoint(lm.x + r * Math.cos(a), lm.y + r * Math.sin(a), 0, W, H));
+            ptsTop.push(projectPoint(lm.x + r * Math.cos(a), lm.y + r * Math.sin(a), topZ, W, H));
+          }
+          if (ptsBase.every(p => p !== null) && ptsTop.every(p => p !== null)) {
+            for (let i = 0; i < segs; i++) {
+              const next = (i + 1) % segs;
+              const pB1 = ptsBase[i], pB2 = ptsBase[next];
+              const pT1 = ptsTop[i], pT2 = ptsTop[next];
+              const avgZ = (pB1.z + pB2.z + pT1.z + pT2.z) * 0.25;
+              drawList.push({
+                depth: avgZ,
+                draw: () => {
+                  ctx3D.beginPath();
+                  ctx3D.moveTo(pB1.x, pB1.y);
+                  ctx3D.lineTo(pB2.x, pB2.y);
+                  ctx3D.lineTo(pT2.x, pT2.y);
+                  ctx3D.lineTo(pT1.x, pT1.y);
+                  ctx3D.closePath();
+                  ctx3D.fillStyle = lm.color;
+                  ctx3D.fill();
+                  ctx3D.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                  ctx3D.lineWidth = 0.8;
+                  ctx3D.stroke();
+                }
+              });
+            }
+            const avgTopZ = ptsTop.reduce((s, p) => s + p.z, 0) / segs;
+            drawList.push({
+              depth: avgTopZ - 0.1,
+              draw: () => {
+                ctx3D.beginPath();
+                ctx3D.moveTo(ptsTop[0].x, ptsTop[0].y);
+                for (let i = 1; i < segs; i++) ctx3D.lineTo(ptsTop[i].x, ptsTop[i].y);
+                ctx3D.closePath();
+                ctx3D.fillStyle = lm.roofColor || lm.color;
+                ctx3D.fill();
+                ctx3D.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx3D.lineWidth = 1;
+                ctx3D.stroke();
+              }
+            });
+            const lbl = projectPoint(lm.x, lm.y, topZ - 2.5, W, H);
+            if (lbl) {
+              drawList.push({
+                depth: lbl.z - 5.0,
+                draw: () => {
+                  ctx3D.font = '10px ui-monospace, monospace';
+                  const txt = `${lm.name} [H:${h}m]`;
+                  const tw = ctx3D.measureText(txt).width;
+                  ctx3D.fillStyle = 'rgba(10, 15, 29, 0.85)';
+                  ctx3D.fillRect(lbl.x - tw * 0.5 - 4, lbl.y - 12, tw + 8, 15);
+                  ctx3D.strokeStyle = lm.color; ctx3D.lineWidth = 1;
+                  ctx3D.strokeRect(lbl.x - tw * 0.5 - 4, lbl.y - 12, tw + 8, 15);
+                  ctx3D.fillStyle = lm.labelColor || '#fff';
+                  ctx3D.fillText(txt, lbl.x - tw * 0.5, lbl.y);
+                }
+              });
+            }
+          }
+        } else if (lm.type === 'pyramid') {
+          const hw = (lm.w || 7.0) * 0.5, hd = (lm.d || 7.0) * 0.5;
+          const h = lm.h || 9.0;
+          const topZ = -h;
+          const apex = projectPoint(lm.x, lm.y, topZ, W, H);
+          const b1 = projectPoint(lm.x - hw, lm.y - hd, 0, W, H);
+          const b2 = projectPoint(lm.x + hw, lm.y - hd, 0, W, H);
+          const b3 = projectPoint(lm.x + hw, lm.y + hd, 0, W, H);
+          const b4 = projectPoint(lm.x - hw, lm.y + hd, 0, W, H);
+          if (apex && b1 && b2 && b3 && b4) {
+            const faces = [
+              [b1, b2, apex],
+              [b2, b3, apex],
+              [b3, b4, apex],
+              [b4, b1, apex]
+            ];
+            faces.forEach(pts => {
+              const avgZ = (pts[0].z + pts[1].z + pts[2].z) / 3.0;
+              drawList.push({
+                depth: avgZ,
+                draw: () => {
+                  ctx3D.beginPath();
+                  ctx3D.moveTo(pts[0].x, pts[0].y);
+                  ctx3D.lineTo(pts[1].x, pts[1].y);
+                  ctx3D.lineTo(pts[2].x, pts[2].y);
+                  ctx3D.closePath();
+                  ctx3D.fillStyle = lm.color;
+                  ctx3D.fill();
+                  ctx3D.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                  ctx3D.lineWidth = 1;
+                  ctx3D.stroke();
+                }
+              });
+            });
+            const lbl = projectPoint(lm.x, lm.y, topZ - 2.5, W, H);
+            if (lbl) {
+              drawList.push({
+                depth: lbl.z - 5.0,
+                draw: () => {
+                  ctx3D.font = '10px ui-monospace, monospace';
+                  const txt = `${lm.name} [H:${h}m]`;
+                  const tw = ctx3D.measureText(txt).width;
+                  ctx3D.fillStyle = 'rgba(10, 15, 29, 0.85)';
+                  ctx3D.fillRect(lbl.x - tw * 0.5 - 4, lbl.y - 12, tw + 8, 15);
+                  ctx3D.strokeStyle = lm.color; ctx3D.lineWidth = 1;
+                  ctx3D.strokeRect(lbl.x - tw * 0.5 - 4, lbl.y - 12, tw + 8, 15);
+                  ctx3D.fillStyle = lm.labelColor || '#fff';
+                  ctx3D.fillText(txt, lbl.x - tw * 0.5, lbl.y);
+                }
+              });
+            }
           }
         }
       });

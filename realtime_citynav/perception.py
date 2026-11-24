@@ -8,6 +8,8 @@ import cv2
 
 try:
     import torch
+    if "YOLO_CONFIG_DIR" not in os.environ:
+        os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".yolo"))
     from ultralytics import YOLO
     _YOLO_AVAILABLE = True
 except ImportError:

@@ -17,6 +17,11 @@ try:
 except ImportError:
     _GENAI_AVAILABLE = False
 
+try:
+    from realtime_citynav.audit import log_event
+except Exception:
+    def log_event(*args, **kwargs): pass
+
 
 class VoiceTranscriber:
     """Multi-tier Speech-to-Text transcriber for flight commands."""
@@ -110,16 +115,18 @@ class VoiceTranscriber:
             confidence = float(parsed.get("confidence", 0.95))
             is_emergency = bool(parsed.get("is_emergency", False)) or self.is_emergency_keyword(transcript)
 
-            return {
+            result = {
                 "transcript": transcript,
                 "confidence": confidence,
                 "is_emergency": is_emergency,
                 "source": "gemini_audio",
                 "latency_ms": (time.perf_counter() - t0) * 1000.0
             }
+            log_event("VOICE_TRANSCRIBED", result)
+            return result
         except Exception as e:
             print(f"[VoiceTranscriber] Gemini audio transcription error: {e}")
-            return {
+            fallback_res = {
                 "transcript": "",
                 "confidence": 0.0,
                 "is_emergency": False,
@@ -127,6 +134,8 @@ class VoiceTranscriber:
                 "source": "error_fallback",
                 "latency_ms": (time.perf_counter() - t0) * 1000.0
             }
+            log_event("VOICE_TRANSCRIBED", fallback_res)
+            return fallback_res
 
     def process_transcript_text(
         self,

@@ -240,7 +240,13 @@ def create_app(system_orchestrator=None):
         body = request.get_json(force=True, silent=True) or {}
         instruction = body.get("instruction", "").strip()
         if not instruction:
-            instruction = "Fly to the fountain, then pass the red building, and navigate to the tower"
+            env_name = getattr(app.orchestrator.config.env, "name", "city") if app.orchestrator else "city"
+            if env_name == "blocks":
+                instruction = "Fly to the orange block, then circle the blue cylinder, and inspect the red pillar"
+            elif env_name in ("neighborhood", "nh"):
+                instruction = "Fly to the white car, then pass the stop sign, and navigate to the house"
+            else:
+                instruction = "Fly to the fountain, then pass the red building, and navigate to the tower"
 
         if app.orchestrator is not None:
             subgoals = app.orchestrator.start_mission(instruction)
@@ -316,8 +322,8 @@ class DashboardServer:
     def start(self) -> None:
         """Start Flask dashboard in background daemon thread."""
         def run():
-            # Run without reloader in background thread
-            self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True)
+            # Run without reloader in background thread, load_dotenv=False avoids Windows console handle collision
+            self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True, load_dotenv=False)
 
         self.thread = threading.Thread(target=run, daemon=True, name="DashboardServerThread")
         self.thread.start()

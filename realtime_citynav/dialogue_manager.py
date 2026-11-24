@@ -15,6 +15,11 @@ try:
 except ImportError:
     _GENAI_AVAILABLE = False
 
+try:
+    from realtime_citynav.audit import log_event
+except Exception:
+    def log_event(*args, **kwargs): pass
+
 
 class DialogueManager:
     """Non-blocking operator dialogue and command interruption manager.
@@ -53,7 +58,10 @@ class DialogueManager:
         self,
         api_key: Optional[str] = None,
         model_name: str = "gemini-3.5-flash",
-        mock: bool = False
+        mock: bool = False,
+        environment: str = "city",
+        known_landmarks: Optional[List[str]] = None,
+        landmark_centers: Optional[Dict[str, Any]] = None
     ):
         self.mock = mock
         if mock or api_key is None or api_key == "":
@@ -62,10 +70,16 @@ class DialogueManager:
             self.api_key = api_key
 
         self.model_name = model_name
+        self.environment = environment
         self.command_queue: queue.Queue[str] = queue.Queue()
         self.client = None
-        self.known_landmarks: List[str] = list(self.KNOWN_DEFAULT_LANDMARKS)
-        self.landmark_centers: Dict[str, np.ndarray] = dict(self.KNOWN_LANDMARK_CENTERS)
+        self.known_landmarks: List[str] = list(known_landmarks) if known_landmarks else list(self.KNOWN_DEFAULT_LANDMARKS)
+        if known_landmarks:
+            type(self).KNOWN_DEFAULT_LANDMARKS = list(known_landmarks)
+        self.landmark_centers: Dict[str, np.ndarray] = {
+            k: (np.array(v, dtype=float) if not isinstance(v, np.ndarray) else v)
+            for k, v in (landmark_centers.items() if landmark_centers else self.KNOWN_LANDMARK_CENTERS.items())
+        }
         self.last_planned_mission: Optional[Dict[str, Any]] = None
 
         if not self.mock and _GENAI_AVAILABLE and self.api_key:
@@ -195,28 +209,30 @@ class DialogueManager:
             }
 
         known_str = ", ".join(self.known_landmarks)
+        known_json = json.dumps(self.known_landmarks)
         prompt = (
-            "You are the master flight planner and cognitive mission decomposition AI for an autonomous urban drone.\n"
+            "You are the master flight planner and cognitive mission decomposition AI for an autonomous drone.\n"
+            f"Active Simulation Environment: '{self.environment}'.\n"
             "Analyze the operator's flight instruction and break it down into an ordered sequence of flight subgoals and kinematically rich legs.\n"
             "Coordinates convention: 3D NED frame (North=+X meters, East=+Y meters, Down=+Z meters; altitude h means Z = -h).\n\n"
-            f"Known Environment Landmarks: {known_str}.\n"
-            "NOTE: The environment can contain ANY physical landmark or structure (e.g. fountain, red building, blue building, tower, hospital, warehouse, solar panels, crane, helipad, stadium, bridge, library, hangar, dock, parking lot, etc.). Extract and preserve any arbitrary landmark mentioned.\n\n"
+            f"Known Environment Landmarks in '{self.environment}': {known_str}.\n"
+            "NOTE: The environment can contain ANY physical landmark or structure in this world. Extract and preserve any arbitrary landmark mentioned.\n\n"
             "Rules & Capabilities:\n"
             "1. Multi-Leg Navigation: Decompose routes with transition words ('then', 'next', 'after that', 'followed by', 'from X to Y') into clean, ordered subgoals.\n"
             "2. Spatial Relations & Clearances: ALWAYS preserve both vertical and horizontal offsets and prepositions in the subgoal text. Do NOT strip altitude or direction prepositions.\n"
-            "   - Vertical: '50m above fountain', '25m over tower', 'at 40m altitude'\n"
-            "   - Horizontal: '15m in front of tower', '10m behind hospital', '20m to the left of blue building', 'right of warehouse'\n"
-            "   - Compass: '15m north and 20m east of red building' (populate dx: +15.0, dy: +20.0)\n"
-            "   - Compound: '20m above and 15m behind red building', '10m to the left and 25m above tower'\n"
+            "   - Vertical: '50m above landmark', '25m over tower', 'at 40m altitude'\n"
+            "   - Horizontal: '15m in front of target', '10m behind object', '20m to the left of pillar'\n"
+            "   - Compass: '15m north and 20m east of target' (populate dx: +15.0, dy: +20.0)\n"
+            "   - Compound: '20m above and 15m behind target'\n"
             "3. Geometric Trajectories & Curves:\n"
-            "   - Continuous Orbits / Circling: (e.g. 'circle around blue building 3 times clockwise at 25m altitude facing forward at 5 m/s at 20m radius'). Action: 'ORBIT'.\n"
-            "   - Figure-8 Maneuver: (e.g. 'fly a figure 8 between red and blue building'). Action: 'FIGURE_8' or 'CURVE' with waypoints.\n"
-            "   - Spiral Climb / Descent: (e.g. 'spiral upwards around tower from 10m to 40m altitude'). Action: 'SPIRAL' or 'CURVE' with waypoints.\n"
-            "   - Search Grid / Lawnmower: (e.g. 'search area around stadium in a grid'). Action: 'SEARCH_GRID' or 'CURVE' with waypoints.\n"
+            "   - Continuous Orbits / Circling: (e.g. 'circle around target 3 times clockwise at 25m altitude facing forward at 5 m/s at 20m radius'). Action: 'ORBIT'.\n"
+            "   - Figure-8 Maneuver: Action: 'FIGURE_8' or 'CURVE' with waypoints.\n"
+            "   - Spiral Climb / Descent: Action: 'SPIRAL' or 'CURVE' with waypoints.\n"
+            "   - Search Grid / Lawnmower: Action: 'SEARCH_GRID' or 'CURVE' with waypoints.\n"
             "   - Explicit Waypoint Curves: If coordinate paths are provided (e.g. 'follow curve [[10, 20, -5], ...]'), Action: 'CURVE'.\n"
-            "4. Shorthand & Adjective Resolution: Resolve shorthand references (e.g. 'the red one' -> 'red building', 'blue' -> 'blue building', 'go from red to blue' -> 'red building' then 'blue building'). For novel landmarks, keep their clean name.\n"
-            "5. Collective Quantifiers: Phrases like 'visit all landmarks', 'go to every landmark', 'tour the city', 'explore each building' must expand into the full ordered list of all known environment landmarks: [\"fountain\", \"red building\", \"blue building\", \"tower\", \"hospital\"].\n"
-            "6. Patrol Patterns: Instructions commanding patrolling (e.g. 'patrol between warehouse and dock 3 times') should be decomposed into appropriate alternating transit legs.\n\n"
+            "4. Shorthand & Adjective Resolution: Resolve shorthand references (e.g. 'the red one' -> 'red pillar' / 'red building', 'blue' -> 'blue cylinder' / 'blue building'). For novel landmarks, keep their clean name.\n"
+            f"5. Collective Quantifiers & Exploration: Phrases like 'visit all landmarks', 'go to every landmark', 'tour the environment', 'explore the area', 'explore', 'scout' must expand into the full ordered list of all known environment landmarks: {known_json}.\n"
+            "6. Patrol Patterns: Instructions commanding patrolling should be decomposed into appropriate alternating transit legs.\n\n"
             "Return ONLY a JSON object formatted as:\n"
             "{\n"
             "  \"mission_type\": \"MULTI_LEG\" | \"ORBIT\" | \"PATROL\" | \"SEARCH\" | \"WAYPOINT_PATH\" | \"FIGURE_8\" | \"SPIRAL\" | \"DIRECT_NAVIGATION\",\n"
@@ -358,6 +374,15 @@ class DialogueManager:
         data["subgoals"] = resolved_subgoals
         data["raw_instruction"] = instruction
         self.last_planned_mission = data
+        log_event("MISSION_PLANNED", {
+            "instruction": instruction,
+            "engine": "gemini_llm" if (self.client and not self.mock) else "heuristic",
+            "model": self.model_name if (self.client and not self.mock) else None,
+            "subgoals": resolved_subgoals,
+            "mission_type": data.get("mission_type"),
+            "rationale": data.get("rationale"),
+            "num_legs": len(data.get("legs", []))
+        })
         return data
 
     def parse_initial_instruction(self, instruction: str) -> List[str]:
@@ -587,12 +612,30 @@ class DialogueManager:
                 if intent == "MULTI_SUBGOAL_MISSION" and not data.get("subgoals"):
                     data["subgoals"] = self.parse_initial_instruction(msg)
 
+                log_event("OPERATOR_INTERRUPTION", {
+                    "command": msg,
+                    "engine": "gemini_flash",
+                    "model": self.model_name,
+                    "intent": data.get("intent"),
+                    "target": data.get("target"),
+                    "reply": data.get("reply"),
+                    "subgoals": data.get("subgoals")
+                })
                 return data
             except Exception as e:
                 print(f"[DialogueManager] Gemini interruption handling failed: {e}. Using heuristic fallback.")
 
         # Heuristic fallback classifier
-        return self._heuristic_classify_interruption(msg, cur_target_str, memory_summary)
+        res = self._heuristic_classify_interruption(msg, cur_target_str, memory_summary)
+        log_event("OPERATOR_INTERRUPTION", {
+            "command": msg,
+            "engine": "heuristic_fallback",
+            "intent": res.get("intent"),
+            "target": res.get("target"),
+            "reply": res.get("reply"),
+            "subgoals": res.get("subgoals")
+        })
+        return res
 
     @classmethod
     def is_orbit_command(cls, text: str) -> bool:
@@ -1394,15 +1437,16 @@ class DialogueManager:
         if self.is_explicit_waypoint_path(text):
             return [text.strip()]
 
-        # Collective quantifier check: "go to every landmark", "visit all landmarks", "tour the city", etc.
+        # Collective quantifier check: "go to every landmark", "visit all landmarks", "tour the city", "explore", etc.
         collective_patterns = [
-            r'\b(?:every|all|each)\s+(?:the\s+)?(?:landmarks?|buildings?)\b',
-            r'\b(?:visit|tour|explore|check|fly\s+to|go\s+to|navigate\s+to)\s+(?:all|every|each)(?:\s+the)?(?:\s+landmarks?|\s+buildings?)?\b',
-            r'\b(?:tour|explore)\s+(?:the\s+)?(?:city|town|world|area)\b',
-            r'\ball\s+of\s+the\s+(?:landmarks?|buildings?)\b',
+            r'\b(?:every|all|each)\s+(?:the\s+)?(?:landmarks?|buildings?|objects?|blocks?|pillars?|targets?)\b',
+            r'\b(?:visit|tour|explore|check|fly\s+to|go\s+to|navigate\s+to)\s+(?:all|every|each)(?:\s+the)?(?:\s+landmarks?|\s+buildings?|\s+objects?|\s+blocks?)?\b',
+            r'\b(?:tour|explore|scout|survey|patrol)\s*(?:the\s+)?(?:city|town|world|area|environment|arena|blocks?|neighborhood|all)?\b',
+            r'\ball\s+of\s+the\s+(?:landmarks?|buildings?|objects?)\b',
+            r'^(?:explore|survey|scout|patrol|tour)$',
         ]
         if any(re.search(pat, lower) for pat in collective_patterns):
-            return list(self.KNOWN_DEFAULT_LANDMARKS)
+            return list(self.known_landmarks)
 
         # Geometric figure-8 pattern
         if any(w in lower for w in ["figure 8", "figure-8", "figure eight"]):

@@ -78,6 +78,21 @@ class MemoryConfig:
 
 def _get_default_gemini_key() -> str:
     key = os.getenv("GEMINI_API_KEY", "")
+    if not key:
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        if os.path.exists(env_file):
+            try:
+                with open(env_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("GEMINI_API_KEY="):
+                            k = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if k:
+                                key = k
+                                os.environ["GEMINI_API_KEY"] = k
+                                break
+            except Exception:
+                pass
     if not key and os.name == "nt":
         try:
             import winreg

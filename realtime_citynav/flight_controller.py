@@ -95,18 +95,25 @@ class RealtimeFlightController:
     def _initialize_connection(self) -> None:
         """Attempt AirSim RPC handshake; fall back to mock simulator if unreachable."""
         if not self.mock and _AIRSIM_AVAILABLE:
-            try:
-                self.client = airsim.MultirotorClient(ip=self.ip, port=self.port, timeout_value=3)
-                self.client.confirmConnection()
-                self.client.enableApiControl(True, vehicle_name=self.vehicle_name)
-                self.client.armDisarm(True, vehicle_name=self.vehicle_name)
-                self.is_armed = True
-                print(f"[FlightController] Successfully connected to AirSim at {self.ip}:{self.port} (vehicle: '{self.vehicle_name}')")
-                return
-            except Exception as e:
-                print(f"[FlightController] AirSim unreachable ({e}). Switching to mock kinematic simulator.")
-                self.mock = True
-                self.client = None
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"[FlightController] Connecting to AirSim at {self.ip}:{self.port} (attempt {attempt}/{max_retries})...")
+                    self.client = airsim.MultirotorClient(ip=self.ip, port=self.port, timeout_value=5)
+                    self.client.confirmConnection()
+                    self.client.enableApiControl(True, vehicle_name=self.vehicle_name)
+                    self.client.armDisarm(True, vehicle_name=self.vehicle_name)
+                    self.is_armed = True
+                    print(f"[FlightController] Successfully connected to AirSim at {self.ip}:{self.port} (vehicle: '{self.vehicle_name}')")
+                    return
+                except Exception as e:
+                    if attempt < max_retries:
+                        time.sleep(1.5)
+                    else:
+                        print(f"[FlightController] AirSim unreachable ({e}). Switching to mock kinematic simulator.")
+                        print(f"[FlightController] TIP: Ensure Blocks.exe or AirSimNH.exe is running on {self.ip}:{self.port}")
+                        self.mock = True
+                        self.client = None
         else:
             self.mock = True
 

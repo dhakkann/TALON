@@ -47,10 +47,14 @@ class CityNavOrchestrator:
             alpha=self.config.memory.position_filter_alpha,
             max_retention_sec=self.config.memory.max_retention_sec
         )
+        default_lms = list(self.config.env.default_landmarks.keys()) if self.config.env.default_landmarks else None
         self.dialogue = DialogueManager(
             api_key=self.config.cognitive.api_key if not self.config.mock_gemini else "",
             model_name=self.config.cognitive.model_name,
-            mock=self.config.mock_gemini
+            mock=self.config.mock_gemini,
+            environment=self.config.env.name,
+            known_landmarks=default_lms,
+            landmark_centers=self.config.env.default_landmarks
         )
         self.flight = RealtimeFlightController(
             ip=self.config.airsim.ip,
@@ -106,17 +110,22 @@ class CityNavOrchestrator:
         self._last_airsim_rgb: Optional[np.ndarray] = None
         self._last_airsim_depth: Optional[np.ndarray] = None
         if not self.config.mock_airsim and _AIRSIM_AVAILABLE:
-            try:
-                self._camera_client = airsim.MultirotorClient(
-                    ip=self.config.airsim.ip,
-                    port=self.config.airsim.port,
-                    timeout_value=3
-                )
-                self._camera_client.confirmConnection()
-                print(f"[Orchestrator] Dedicated AirSim camera client connected to {self.config.airsim.ip}:{self.config.airsim.port}")
-            except Exception as e:
-                print(f"[Orchestrator] AirSim camera client connection warning: {e}")
-                self._camera_client = None
+            for attempt in range(1, 4):
+                try:
+                    self._camera_client = airsim.MultirotorClient(
+                        ip=self.config.airsim.ip,
+                        port=self.config.airsim.port,
+                        timeout_value=5
+                    )
+                    self._camera_client.confirmConnection()
+                    print(f"[Orchestrator] Dedicated AirSim camera client connected to {self.config.airsim.ip}:{self.config.airsim.port}")
+                    break
+                except Exception as e:
+                    if attempt < 3:
+                        time.sleep(1.0)
+                    else:
+                        print(f"[Orchestrator] AirSim camera client connection warning: {e}")
+                        self._camera_client = None
 
         # Thread handles
         self._flight_thread: Optional[threading.Thread] = None
@@ -160,7 +169,7 @@ class CityNavOrchestrator:
             subgoals = self.dialogue.parse_initial_instruction(instruction)
 
         if not subgoals:
-            subgoals = ["fountain", "building", "tower"]
+            subgoals = list(self.dialogue.known_landmarks) if self.dialogue.known_landmarks else ["landmark_1", "landmark_2"]
 
         with self._state_lock:
             self.active_plan = plan
@@ -267,6 +276,25 @@ class CityNavOrchestrator:
             "solar farm": (4.0, 10.0),
             "solar panels": (4.0, 10.0),
             "library": (10.0, 12.0),
+            # Blocks arena landmarks
+            "orange block": (4.0, 6.0),
+            "blue cylinder": (5.0, 6.0),
+            "green cube": (4.0, 6.0),
+            "red pillar": (6.0, 6.0),
+            "yellow pyramid": (4.0, 6.0),
+            "cylinder": (5.0, 6.0),
+            "pillar": (6.0, 6.0),
+            "cube": (4.0, 6.0),
+            "block": (4.0, 6.0),
+            # Neighborhood suburban landmarks
+            "white car": (3.0, 5.0),
+            "red car": (3.0, 5.0),
+            "car": (3.0, 5.0),
+            "truck": (3.5, 6.0),
+            "stop sign": (3.0, 4.0),
+            "tree": (5.0, 6.0),
+            "house": (6.0, 8.0),
+            "bench": (2.5, 4.0),
         }
         alt_val, std_val = 5.0, 8.0
         for k, (a, s) in elevations.items():
@@ -855,10 +883,17 @@ class CityNavOrchestrator:
         cam_client = self._camera_client or (self.flight.client if not self.flight.mock else None)
         if cam_client is not None and _AIRSIM_AVAILABLE and not self.config.mock_airsim:
             try:
+                cam_name = self.config.airsim.camera_name
                 responses = cam_client.simGetImages([
-                    airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.Scene, False, False),
-                    airsim.ImageRequest(self.config.airsim.camera_name, airsim.ImageType.DepthPlanar, True, False)
+                    airsim.ImageRequest(cam_name, airsim.ImageType.Scene, False, False),
+                    airsim.ImageRequest(cam_name, airsim.ImageType.DepthPlanar, True, False)
                 ], vehicle_name=self.flight.vehicle_name)
+                if (not responses or len(responses) < 2 or len(responses[0].image_data_uint8) == 0) and cam_name != "0":
+                    # Fallback to default camera index "0"
+                    responses = cam_client.simGetImages([
+                        airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
+                        airsim.ImageRequest("0", airsim.ImageType.DepthPlanar, True, False)
+                    ], vehicle_name=self.flight.vehicle_name)
                 if len(responses) >= 2 and len(responses[0].image_data_uint8) > 0:
                     img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
                     resp_w = responses[0].width

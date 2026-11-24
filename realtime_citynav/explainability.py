@@ -5,6 +5,11 @@ import threading
 from typing import Callable, Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
+try:
+    from realtime_citynav.audit import log_event
+except Exception:
+    def log_event(*args, **kwargs): pass
+
 
 @dataclass
 class NarrationEvent:
@@ -77,6 +82,13 @@ class LiveRationaleNarrator:
             telemetry=telemetry or {},
             spoken_text=spoken_text
         )
+        
+        log_event("MISSION_EVENT", {
+            "event_type": event_type,
+            "message": message,
+            "spoken_text": spoken_text,
+            "telemetry": telemetry or {}
+        })
         
         with self._lock:
             self._history.append(event)

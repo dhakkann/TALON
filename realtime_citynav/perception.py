@@ -126,6 +126,25 @@ class RealtimePerception:
             "purple pillar": ((130, 80, 70), (160, 255, 255)),
         }
 
+        # Unreal Engine / AirSim Ground-Truth Segmentation Mapping
+        self.segmentation_id_map: Dict[int, str] = {
+            1: "fountain",
+            2: "red building",
+            3: "blue building",
+            4: "tower",
+            5: "hospital",
+            6: "car",
+            7: "truck",
+            8: "tree",
+            9: "stop sign",
+            10: "house",
+            11: "pillar",
+            12: "cylinder",
+            13: "orange block",
+            14: "block",
+            15: "bridge",
+        }
+
         if not self.mock:
             if device is None or (device == "cuda" and not (_YOLO_AVAILABLE and torch.cuda.is_available())):
                 device = "cpu"
@@ -382,8 +401,12 @@ class RealtimePerception:
                     if world_pos is None:
                         continue
                     dist = float(np.linalg.norm(world_pos[:2] - np.array(drone_pose[:2])))
+                    label = self.segmentation_id_map.get(int(val), f"actor_object_{val}")
+                    if self.current_classes:
+                        if not any(c.lower() in label.lower() or label.lower() in c.lower() for c in self.current_classes):
+                            continue
                     detections.append({
-                        "name": f"actor_object_{val}",
+                        "name": label,
                         "conf": 1.0,
                         "bbox": [x, y, x + w, y + h],
                         "centroid_2d": [float(u_c), float(v_c)],
@@ -565,3 +588,42 @@ class RealtimePerception:
             self.last_fps = self._fps_counter / elapsed
             self._fps_counter = 0
             self._fps_time = now
+
+
+def setup_airsim_segmentation(client) -> bool:
+    """Configures Unreal Engine actor mesh IDs so AirSim segmentation returns ground-truth labels."""
+    if client is None:
+        return False
+    try:
+        # Reset all objects to 0
+        client.simSetSegmentationObjectID(".*", 0, True)
+
+        regex_mappings = [
+            (".*[Ff]ountain.*", 1),
+            (".*[Rr]ed.*", 2),
+            (".*[Bb]lue.*", 3),
+            (".*[Tt]ower.*", 4),
+            (".*[Hh]ospital.*", 5),
+            (".*[Cc]ar.*", 6),
+            (".*[Tt]ruck.*", 7),
+            (".*[Tt]ree.*", 8),
+            (".*[Ss]top.*", 9),
+            (".*[Hh]ouse.*", 10),
+            (".*[Pp]illar.*", 11),
+            (".*[Cc]ylinder.*", 12),
+            (".*[Oo]range.*", 13),
+            (".*[Bb]lock.*", 14),
+            (".*[Bb]ridge.*", 15),
+        ]
+        count = 0
+        for regex, obj_id in regex_mappings:
+            try:
+                if client.simSetSegmentationObjectID(regex, obj_id, True):
+                    count += 1
+            except Exception:
+                pass
+        print(f"[AirSim Segmentation] Initialized {count} Unreal Engine actor class filters.")
+        return True
+    except Exception as e:
+        print(f"[AirSim Segmentation] Notice: {e}")
+        return False

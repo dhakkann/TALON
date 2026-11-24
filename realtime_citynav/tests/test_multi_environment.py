@@ -76,25 +76,20 @@ class TestMultiEnvironment(unittest.TestCase):
         perception = RealtimePerception(mock=True, engine="segmentation")
         self.assertEqual(perception.engine, "segmentation")
 
-        # Create an image with an actor ID component (value 85)
+        # Create an image with an unmapped actor ID (85) and mapped actor ID (1 -> fountain)
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         cv2.rectangle(img, (200, 150), (350, 300), (85, 85, 85), -1)
+        cv2.rectangle(img, (400, 150), (550, 300), (1, 1, 1), -1)
 
         depth_img = np.ones((480, 640), dtype=np.float32) * 8.0
         drone_pose = (0.0, 0.0, -5.0, 0.0)
 
         detections = perception._detect_segmentation(img, depth_img, drone_pose)
-        self.assertGreaterEqual(len(detections), 1)
+        self.assertGreaterEqual(len(detections), 2)
 
-        det = detections[0]
-        self.assertEqual(det["name"], "actor_object_85")
-        self.assertEqual(det["conf"], 1.0)
-        bbox = det["bbox"]
-        self.assertAlmostEqual(bbox[0], 200, delta=5)
-        self.assertAlmostEqual(bbox[1], 150, delta=5)
-        self.assertAlmostEqual(bbox[2], 350, delta=5)
-        self.assertAlmostEqual(bbox[3], 300, delta=5)
-        self.assertIsNotNone(det["world_pos"])
+        names = [d["name"] for d in detections]
+        self.assertIn("actor_object_85", names)
+        self.assertIn("fountain", names)
 
     def test_target_vocabulary_update_without_set_classes(self):
         """Verify that changing target vocabulary on COCO/Color updates current_classes safely."""

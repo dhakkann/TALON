@@ -109,6 +109,7 @@ class CityNavOrchestrator:
         self._camera_client = None
         self._last_airsim_rgb: Optional[np.ndarray] = None
         self._last_airsim_depth: Optional[np.ndarray] = None
+        self._last_airsim_seg: Optional[np.ndarray] = None
         if not self.config.mock_airsim and _AIRSIM_AVAILABLE:
             for attempt in range(1, 4):
                 try:
@@ -119,6 +120,9 @@ class CityNavOrchestrator:
                     )
                     self._camera_client.confirmConnection()
                     print(f"[Orchestrator] Dedicated AirSim camera client connected to {self.config.airsim.ip}:{self.config.airsim.port}")
+                    if getattr(self.perception, "engine", "") == "segmentation":
+                        from realtime_citynav.perception import setup_airsim_segmentation
+                        setup_airsim_segmentation(self._camera_client)
                     break
                 except Exception as e:
                     if attempt < 3:
@@ -625,8 +629,9 @@ class CityNavOrchestrator:
             rgb, depth = self._acquire_frames()
             pose = self.flight.get_pose()
 
-            # Run YOLO-World detection and sub-millisecond 3D projection
-            detections = self.perception.detect_and_project(rgb, depth, pose)
+            # Run multi-engine detection (feed segmentation mask if engine is segmentation)
+            det_input = self._last_airsim_seg if (getattr(self.perception, "engine", "") == "segmentation" and self._last_airsim_seg is not None) else rgb
+            detections = self.perception.detect_and_project(det_input, depth, pose)
 
             # Update 3D persistent spatial memory
             if detections:
@@ -884,16 +889,23 @@ class CityNavOrchestrator:
         if cam_client is not None and _AIRSIM_AVAILABLE and not self.config.mock_airsim:
             try:
                 cam_name = self.config.airsim.camera_name
-                responses = cam_client.simGetImages([
+                requests = [
                     airsim.ImageRequest(cam_name, airsim.ImageType.Scene, False, False),
                     airsim.ImageRequest(cam_name, airsim.ImageType.DepthPlanar, True, False)
-                ], vehicle_name=self.flight.vehicle_name)
+                ]
+                if getattr(self.perception, "engine", "") == "segmentation":
+                    requests.append(airsim.ImageRequest(cam_name, airsim.ImageType.Segmentation, False, False))
+
+                responses = cam_client.simGetImages(requests, vehicle_name=self.flight.vehicle_name)
                 if (not responses or len(responses) < 2 or len(responses[0].image_data_uint8) == 0) and cam_name != "0":
                     # Fallback to default camera index "0"
-                    responses = cam_client.simGetImages([
+                    fallback_requests = [
                         airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
                         airsim.ImageRequest("0", airsim.ImageType.DepthPlanar, True, False)
-                    ], vehicle_name=self.flight.vehicle_name)
+                    ]
+                    if getattr(self.perception, "engine", "") == "segmentation":
+                        fallback_requests.append(airsim.ImageRequest("0", airsim.ImageType.Segmentation, False, False))
+                    responses = cam_client.simGetImages(fallback_requests, vehicle_name=self.flight.vehicle_name)
                 if len(responses) >= 2 and len(responses[0].image_data_uint8) > 0:
                     img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
                     resp_w = responses[0].width
@@ -909,6 +921,19 @@ class CityNavOrchestrator:
                         responses[1].image_data_float, responses[1].width, responses[1].height
                     )
                     depth_arr = np.array(depth, dtype=np.float32)
+
+                    if len(responses) >= 3 and len(responses[2].image_data_uint8) > 0:
+                        seg1d = np.frombuffer(responses[2].image_data_uint8, dtype=np.uint8)
+                        if seg1d.size == resp_h * resp_w * 3:
+                            seg = seg1d.reshape(resp_h, resp_w, 3)
+                        elif seg1d.size == resp_h * resp_w * 4:
+                            seg = seg1d.reshape(resp_h, resp_w, 4)[:, :, :3]
+                        else:
+                            seg = None
+                        if seg is not None and (resp_w != w or resp_h != h):
+                            seg = cv2.resize(seg, (w, h), interpolation=cv2.INTER_NEAREST)
+                        self._last_airsim_seg = seg
+
                     if rgb is not None and depth_arr is not None:
                         # Resize to standard config resolution if AirSim returned different aspect/size
                         if resp_w != w or resp_h != h:
@@ -983,14 +1008,33 @@ class CityNavOrchestrator:
             if py_near > cy:
                 cv2.line(rgb, (px_near, min(h - 1, py_near)), (px_far, py_far), (40, 50, 60), 1)
 
-        # Define 3D mock world landmarks (fixed world coordinates)
-        mock_landmarks = [
-            {"name": "fountain", "pos": np.array([32.0, 0.0, 0.0]), "color": (210, 170, 40), "w": 6.0, "h": 4.5},
-            {"name": "red building", "pos": np.array([75.0, 12.0, 0.0]), "color": (50, 50, 200), "w": 12.0, "h": 18.0},
-            {"name": "blue building", "pos": np.array([75.0, -14.0, 0.0]), "color": (200, 110, 30), "w": 12.0, "h": 18.0},
-            {"name": "tower", "pos": np.array([130.0, -10.0, 0.0]), "color": (180, 180, 210), "w": 8.0, "h": 32.0},
-            {"name": "hospital", "pos": np.array([60.0, -30.0, 0.0]), "color": (220, 220, 240), "w": 16.0, "h": 12.0},
-        ]
+        # Define 3D mock world landmarks (dynamically selected per environment)
+        env_name = getattr(self.config.env, "name", "city").lower() if hasattr(self.config, "env") else "city"
+        if env_name in ("blocks", "block"):
+            mock_landmarks = [
+                {"name": "orange block", "pos": np.array([25.0, 5.0, 0.0]), "color": (30, 130, 245), "w": 6.0, "h": 6.0},
+                {"name": "blue cylinder", "pos": np.array([45.0, -10.0, 0.0]), "color": (230, 100, 30), "w": 6.0, "h": 10.0},
+                {"name": "red pillar", "pos": np.array([60.0, 15.0, 0.0]), "color": (50, 50, 220), "w": 4.0, "h": 14.0},
+                {"name": "green cube", "pos": np.array([35.0, -20.0, 0.0]), "color": (50, 200, 50), "w": 8.0, "h": 8.0},
+                {"name": "yellow pyramid", "pos": np.array([50.0, 0.0, 0.0]), "color": (30, 210, 230), "w": 7.0, "h": 9.0},
+            ]
+        elif env_name in ("neighborhood", "nh", "suburb"):
+            mock_landmarks = [
+                {"name": "white car", "pos": np.array([25.0, 8.0, 0.0]), "color": (230, 230, 230), "w": 4.5, "h": 2.0},
+                {"name": "stop sign", "pos": np.array([40.0, 0.0, 0.0]), "color": (50, 50, 220), "w": 1.2, "h": 3.0},
+                {"name": "red car", "pos": np.array([55.0, -12.0, 0.0]), "color": (30, 30, 210), "w": 4.5, "h": 2.0},
+                {"name": "house", "pos": np.array([50.0, 15.0, 0.0]), "color": (60, 130, 210), "w": 14.0, "h": 8.0},
+                {"name": "tree", "pos": np.array([30.0, -20.0, 0.0]), "color": (40, 160, 40), "w": 5.0, "h": 7.0},
+                {"name": "bench", "pos": np.array([20.0, -5.0, 0.0]), "color": (40, 90, 140), "w": 2.5, "h": 1.2},
+            ]
+        else:
+            mock_landmarks = [
+                {"name": "fountain", "pos": np.array([32.0, 0.0, 0.0]), "color": (210, 170, 40), "w": 6.0, "h": 4.5},
+                {"name": "red building", "pos": np.array([75.0, 12.0, 0.0]), "color": (50, 50, 200), "w": 12.0, "h": 18.0},
+                {"name": "blue building", "pos": np.array([75.0, -14.0, 0.0]), "color": (200, 110, 30), "w": 12.0, "h": 18.0},
+                {"name": "tower", "pos": np.array([130.0, -10.0, 0.0]), "color": (180, 180, 210), "w": 8.0, "h": 32.0},
+                {"name": "hospital", "pos": np.array([60.0, -30.0, 0.0]), "color": (220, 220, 240), "w": 16.0, "h": 12.0},
+            ]
 
         # Sort landmarks by distance (back to front rendering)
         def get_landmark_dist(lm):

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Large binaries, recordings, and simulator artifacts (keep out of git)
+*.zip
+*.exe
+*.pak
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wav
+recordings/
+demo_recordings/
+chats/gemini/*-live_*.txt
+chats/gemini/*-showcase_*.txt
+chats/gemini/*-web_cockpit.txt
+*.log

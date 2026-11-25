@@ -1,0 +1,28 @@
+{
+    "SettingsVersion": 1.2,
+    "SimMode": "Multirotor",
+    "ClockSpeed": 1.0,
+    "ApiServerPort": 41451,
+    "CameraDefaults": {
+        "CaptureSettings": [
+            {
+                "ImageType": 0,
+                "Width": 320,
+                "Height": 240,
+                "FOV_Degrees": 90
+            },
+            {
+                "ImageType": 1,
+                "Width": 80,
+                "Height": 60,
+                "FOV_Degrees": 90
+            }
+        ]
+    },
+    "Vehicles": {
+       "Drone": {
+           "VehicleType": "SimpleFlight",
+           "EnableTrace": false
+         }
+     }
+}
